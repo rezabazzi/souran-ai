@@ -1,0 +1,189 @@
+#!/bin/bash
+# Souran AI Network Server v5.1.0
+# Zero-Block DNS Resolver - Absolute Independence Architecture
+set -euo pipefail
+
+VERSION="5.1.0"
+
+log_info() {
+    echo "[SOURAN-AI] $(date -u +%Y-%m-%dT%H:%M:%SZ) INFO: $1" | tee -a /var/log/souran-ai.log
+}
+
+log_ok() {
+    echo "[SOURAN-AI] $(date -u +%Y-%m-%dT%H:%M:%SZ) OK: $1" | tee -a /var/log/souran-ai.log
+}
+
+log_error() {
+    echo "[SOURAN-AI] $(date -u +%Y-%m-%dT%H:%M:%SZ) ERROR: $1" | tee -a /var/log/souran-ai.log >&2
+}
+
+init_services() {
+    log_info "Initializing Souran AI Network Server services"
+    local services=("souran-dns" "cloudflared" "tor" "souran-watchdog")
+    
+    for svc in "${services[@]}"; do
+        if ! systemctl is-active --quiet "$svc" 2>/dev/null; then
+            log_info "Starting $svc..."
+            systemctl restart "$svc" 2>/dev/null || log_error "Failed to start $svc"
+        fi
+    done
+}
+
+verify_dns() {
+    local dns_check
+    dns_check=$(dig @127.0.0.1 google.com +short 2>/dev/null || echo "FAILED")
+    
+    if [ "$dns_check" != "FAILED" ] && [ -n "$dns_check" ]; then
+        log_ok "DNS resolver active: google.com -> $dns_check"
+        return 0
+    else
+        log_error "DNS resolver failed"
+        return 1
+    fi
+}
+
+check_bypass() {
+    log_info "Checking censorship bypass mechanisms"
+    
+    if systemctl is-active --quiet tor 2>/dev/null; then
+        log_ok "Tor proxy: active (port 9050)"
+    else
+        log_error "Tor proxy: inactive"
+    fi
+    
+    if systemctl is-active --quiet cloudflared 2>/dev/null; then
+        log_ok "Cloudflare Tunnel: active"
+    else
+        log_info "Cloudflare Tunnel: not configured"
+    fi
+}
+
+generate_status() {
+    local timestamp dns_status cloudflared_status tor_status watchdog_status
+    
+    timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    dns_status=$(systemctl is-active souran-dns 2>/dev/null || echo "inactive")
+    dns_status=$(echo "$dns_status" | tr -d '\n')
+    cloudflared_status=$(systemctl is-active cloudflared 2>/dev/null || echo "inactive")
+    cloudflared_status=$(echo "$cloudflared_status" | tr -d '\n')
+    tor_status=$(systemctl is-active tor 2>/dev/null || echo "inactive")
+    tor_status=$(echo "$tor_status" | tr -d '\n')
+    watchdog_status=$(systemctl is-active souran-watchdog 2>/dev/null || echo "inactive")
+    watchdog_status=$(echo "$watchdog_status" | tr -d '\n')
+    
+    python3 << 'PYTHON_EOF'
+import json
+status = {
+    'service': 'Souran AI Network Server',
+    'version': '5.1.0',
+    'timestamp': 'TIMESTAMP_PLACEHOLDER',
+    'dns': 'DNS_PLACEHOLDER',
+    'cloudflared': 'CLOUDFLARE_PLACEHOLDER',
+    'tor': 'TOR_PLACEHOLDER',
+    'watchdog': 'WATCHDOG_PLACEHOLDER',
+    'ports': {'dnr': 53, 'api': 53443, 'admin': 8080, 'web': 8081, 'agent': 8082, 'tor': 9050},
+    'features': ['Recursive DNS', 'DNSSEC', 'DoT', 'DoH', 'Tor Bypass', 'Cloudflare Tunnel', 'Advanced Cache', 'Auto-Healing Watchdog', 'Zero-Block', 'Web Dashboard 8081', 'Agent Control 8082']
+}
+with open('/run/souran-ai-status.json', 'w') as f:
+    json.dump(status, f, indent=2)
+PYTHON_EOF
+    
+    # Now replace placeholders using Python
+    python3 -c "
+import json
+with open('/run/souran-ai-status.json', 'r') as f:
+    data = json.load(f)
+data['timestamp'] = '$timestamp'
+data['dns'] = '$dns_status'
+data['cloudflared'] = '$cloudflared_status'
+data['tor'] = '$tor_status'
+data['watchdog'] = '$watchdog_status'
+with open('/run/souran-ai-status.json', 'w') as f:
+    json.dump(data, f, indent=2)
+"
+}
+
+init() {
+    log_info "Initializing Souran AI Network Server v${VERSION}"
+    
+    mkdir -p /opt/souran-ai/web /opt/souran-ai/agent /run/souran-ai
+    init_services
+    verify_dns || true
+    check_bypass
+    generate_status
+    
+    if ! pgrep -f "web-dashboard" > /dev/null 2>&1; then
+        nohup python3 /opt/souran-ai/web-dashboard.py > /var/log/souran-web.log 2>&1 &
+        log_ok "Web dashboard started on port 8081"
+    fi
+    
+    if ! pgrep -f "agent-dashboard" > /dev/null 2>&1; then
+        nohup python3 /opt/souran-ai/agent-dashboard.py > /var/log/souran-agent.log 2>&1 &
+        log_ok "Agent control started on port 8082"
+    fi
+    
+    log_ok "Souran AI Network Server initialized successfully"
+}
+
+status() {
+    cat /run/souran-ai-status.json 2>/dev/null || echo '{"error":"Not initialized"}'
+}
+
+check_services() {
+    log_info "Service status check"
+    for svc in souran-dns cloudflared tor souran-watchdog; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            log_ok "$svc: active"
+        else
+            log_error "$svc: inactive"
+        fi
+    done
+}
+
+restart_services() {
+    local services=("souran-dns" "cloudflared" "tor" "souran-watchdog")
+    for svc in "${services[@]}"; do
+        systemctl restart "$svc" 2>/dev/null || true
+    done
+    sleep 3
+    check_services
+}
+
+case "${1:-}" in
+    init)
+        init
+        ;;
+    status)
+        status
+        ;;
+    check)
+        check_services
+        verify_dns || true
+        check_bypass
+        ;;
+    restart)
+        restart_services
+        ;;
+    logs)
+        tail -f /var/log/souran-ai.log
+        ;;
+    stop)
+        local services=("souran-dns" "cloudflared" "tor" "souran-watchdog")
+        for svc in "${services[@]}"; do
+            systemctl stop "$svc" 2>/dev/null || true
+        done
+        pkill -f "web-dashboard.py" 2>/dev/null || true
+        pkill -f "agent-dashboard.py" 2>/dev/null || true
+        log_ok "All services stopped"
+        ;;
+    *)
+        echo "Usage: souran-ai {init|status|check|restart|logs|stop}"
+        echo "  init    - Initialize and start all services"
+        echo "  status  - Show current status JSON"
+        echo "  check   - Verify services and DNS"
+        echo "  restart - Restart all services"
+        echo "  logs    - Tail the Souran AI log"
+        echo "  stop    - Stop all Souran AI services"
+        exit 1
+        ;;
+esac
