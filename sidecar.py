@@ -13,6 +13,15 @@ import uvicorn
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import souran_auth
 
+try:
+    import souran_features
+    _FEATURES_OK = True
+except Exception as _feat_exc:  # pragma: no cover
+    souran_features = None
+    _FEATURES_OK = False
+    print(f"[sidecar] souran_features unavailable: {_feat_exc}",
+          file=sys.stderr, flush=True)
+
 app = FastAPI(title="Souran Sidecar", version="3.0.0")
 
 TOGGLE_FILE = "/opt/souran-ai/toggles.conf"
@@ -309,6 +318,7 @@ async def gaming_dns():
         "nintendo": "127.0.0.1"
     }
 
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "service": "sidecar", "version": "5.0.0"}
@@ -357,6 +367,95 @@ async def souran_auth_middleware(request: Request, call_next):
 async def auth_state():
     """Report on the credential itself — part of the security surface."""
     return souran_auth.audit_token_state()
+
+
+# --------------------------------------------------------------------------
+# FEATURE REGISTRY (v5.1.0)
+# --------------------------------------------------------------------------
+# Replaces the old five-key toggles.conf surface. Every capability the
+# stack has is now discoverable from one endpoint, each with its desired
+# state, its PROBED runtime state, and any unmet dependencies. The
+# desired/effective split matters: a toggle that reads "on" while the
+# service is stopped is a lie, and the dashboard must show the difference
+# rather than hide it behind the flag.
+FEATURE_IDS = sorted(souran_features.FEATURES) if _FEATURES_OK else []
+
+
+@app.get("/api/features")
+async def features_list():
+    """Full registry: every feature, its state, and its dependencies."""
+    if not _FEATURES_OK:
+        raise HTTPException(503, "feature registry unavailable")
+    return souran_features.full_report()
+
+
+@app.get("/api/features/summary/categories")
+async def features_by_category():
+    """Grouped view, which is what the dashboard renders."""
+    if not _FEATURES_OK:
+        raise HTTPException(503, "feature registry unavailable")
+    rep = souran_features.full_report()
+    cats = {}
+    for fid, f in rep["features"].items():
+        cats.setdefault(f["category"], []).append(f)
+    return {
+        "summary": rep["summary"],
+        "categories": {
+            k: sorted(v, key=lambda x: x["label"]) for k, v in sorted(cats.items())
+        },
+    }
+
+
+@app.get("/api/features/{fid}")
+async def feature_get(fid: str):
+    if not _FEATURES_OK:
+        raise HTTPException(503, "feature registry unavailable")
+    if fid not in souran_features.FEATURES:
+        raise HTTPException(404, f"unknown feature: {fid}")
+    want = souran_features.desired(fid)
+    eff, detail = souran_features.probe_feature(fid)
+    spec = souran_features.FEATURES[fid]
+    return {
+        "id": fid,
+        "label": spec["label"],
+        "category": spec["category"],
+        "description": spec["description"],
+        "desired": want,
+        "effective": "on" if eff else "off",
+        "detail": detail,
+        "requires": spec.get("requires", []),
+        "drift": (want == "on") != bool(eff),
+        "controllable": bool(spec.get("units")),
+    }
+
+
+@app.post("/api/features/{fid}")
+async def feature_set(fid: str, request: Request):
+    """Turn a feature on or off.
+
+    The feature id is looked up in the registry rather than used as a
+    shell fragment, and the requested state is validated against a fixed
+    allowlist, so no caller-supplied string ever reaches systemctl.
+    """
+    if not _FEATURES_OK:
+        raise HTTPException(503, "feature registry unavailable")
+    if fid not in souran_features.FEATURES:
+        raise HTTPException(404, f"unknown feature: {fid}")
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    state_want = str(body.get("state", "")).strip().lower()
+
+    if state_want not in souran_features.VALID_STATES:
+        raise HTTPException(400,
+                            f"state must be one of {list(souran_features.VALID_STATES)}")
+
+    result = souran_features.set_feature(fid, state_want)
+    if not result.get("ok"):
+        raise HTTPException(409, result.get("error", "apply failed"))
+    return result
 
 
 @app.post("/api/auth/rotate")
@@ -433,6 +532,8 @@ async def exec_cmd(request: Request):
     except Exception as e:
         return JSONResponse({"error": f"{type(e).__name__}: {e}"},
                             status_code=500)
+
+
 
 
 if __name__ == '__main__':

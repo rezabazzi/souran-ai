@@ -26,12 +26,45 @@ cmd_test() {
     nft --check --file "$NFT_CONF" && echo "syntax OK"
 }
 
+# Publish firewall/NAT state where the unprivileged control plane can read
+# it. The dashboard services run with NoNewPrivileges=yes, so they cannot
+# read netfilter state directly and cannot sudo. Without this file their
+# probes reported the firewall as "off" while it was enforcing.
+publish_state() {
+    local out=/opt/souran-ai/logs/firewall-state.json
+    local sf=false dnsnat=false tables="[]"
+
+    nft list table inet souran_filter >/dev/null 2>&1 && sf=true
+
+    # The redirect is on ONE line, e.g.
+    #   ip daddr != 127.0.0.0/8 ip protocol udp ... udp dport 53 ... redirect to :9053
+    # Grepping one field and then the other on separate passes fails,
+    # because the lines containing 9053 are not the same lines that
+    # contain "dport 53" in the way the two-step test assumed.
+    if nft list table ip nat 2>/dev/null \
+       | grep 'dport 53' | grep -q '9053'; then
+        dnsnat=true
+    fi
+
+    mkdir -p "$(dirname "$out")"
+    cat > "$out" <<EOF
+{
+  "updated_at": "$(date -Is)",
+  "souran_filter_loaded": $sf,
+  "outbound_dns_to_tor": $dnsnat,
+  "source": "souran-firewall.sh"
+}
+EOF
+    chmod 0644 "$out"
+}
+
 cmd_load() {
     if nft list table inet "$TABLE" >/dev/null 2>&1; then
         echo "souran firewall already loaded"
         return 0
     fi
     nft --file "$NFT_CONF"
+    publish_state
     echo "souran firewall loaded"
 }
 
@@ -40,6 +73,7 @@ cmd_reload() {
     # rules with it and silently break container networking.
     nft delete table inet "$TABLE" 2>/dev/null || true
     nft --file "$NFT_CONF"
+    publish_state
     echo "souran firewall reloaded"
 }
 
@@ -64,6 +98,8 @@ WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
     systemctl enable souran-firewall.service >/dev/null 2>&1 || true
+    # Refresh state now, not only at next boot.
+    cmd_reload >/dev/null 2>&1 || true
     echo "souran-firewall.service installed and enabled"
 }
 
