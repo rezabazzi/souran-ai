@@ -16,21 +16,29 @@ case "$1" in
                     -s /usr/sbin/nologin unbound || true
         fi
 
-        # Fresh TLS keys on the target. The build host's private keys are
-        # deliberately NOT shipped in the .deb (see build-deb-payload.sh),
-        # so DoT has nothing to serve with until these exist.
-        for pair in souran doh; do
-            dir=/opt/souran-ai/config
-            mkdir -p "$dir"
-            if [ ! -s "$dir/$pair.key" ] || [ ! -s "$dir/$pair.pem" ]; then
-                openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-                    -subj "/CN=souran.local/O=Souran AI Network Server" \
-                    -keyout "$dir/$pair.key" -out "$dir/$pair.pem" \
-                    >/dev/null 2>&1 || true
-                [ -f "$dir/$pair.key" ] && chmod 0640 "$dir/$pair.key"
-                [ -f "$dir/$pair.pem" ] && chmod 0644 "$dir/$pair.pem"
-            fi
-        done
+        # TLS material for the encrypted-DNS listeners.
+        #
+        # v5.0.0 generated a bare self-signed leaf here with no
+        # subjectAltName. Measured on the live cert: "No extensions in
+        # certificate". That makes DoT unusable by every client that
+        # matters -- Android Private DNS, Windows DNS-over-HTTPS and
+        # macOS all validate the hostname against the SAN list -- so the
+        # encrypted DNS this project exists to provide could not actually
+        # be switched on by a phone or a PC.
+        #
+        # Delegated to souran-certgen.sh, which builds a proper two-level
+        # PKI: a local root CA plus a leaf carrying DNS and IP SANs for
+        # every name a client might use. Trusting a local root is the
+        # correct model for a self-hosted resolver: DoT is meant to
+        # authenticate the channel to YOUR resolver, not to a public CA.
+        if [ -x /opt/souran-ai/souran-certgen.sh ]; then
+            /opt/souran-ai/souran-certgen.sh issue >/dev/null 2>&1 || \
+                echo "souran: WARNING — TLS certificate generation failed;"
+                echo "souran:          DoT/DoH will not validate until fixed."
+                echo "souran:          run: sudo /opt/souran-ai/souran-certgen.sh issue"
+        else
+            echo "souran: WARNING — souran-certgen.sh missing, no TLS material"
+        fi
 
         # The resolver binds :53, which is privileged. Grant ONLY the bind
         # capability rather than running the service as root.

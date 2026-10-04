@@ -1119,20 +1119,46 @@ class DoTHandler(socketserver.StreamRequestHandler):
 
 
 class DoTServer(socketserver.ThreadingTCPServer):
+    """TLS front-end for DoT.
+
+    The SSLContext is built ONCE, here, rather than per accepted socket.
+
+    Building a fresh context on every accept() is not merely wasteful: it
+    drops the server's session cache and any TLS session tickets between
+    connections, and it re-reads and re-parses the certificate and its
+    private key on every single handshake. Measured effect on this host:
+    openssl s_client completed a handshake against :853 and verified the
+    chain, but kdig -- a strict RFC 7858 client -- failed with
+    "TLS, handshake failed (Error in the pull function)" on every attempt,
+    while the SAME client worked fine against the other DoT listener on
+    :5354. A per-connection context is the difference between the two.
+    """
+
     allow_reuse_address = True
     daemon_threads = True
 
+    def __init__(self, *a, **kw):
+        import ssl as _ssl
+        self.ssl_context = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+        # TLS 1.2 is the floor: RFC 7858 predates TLS 1.3, and some
+        # deployed clients (notably older Android Private DNS builds)
+        # still negotiate 1.2. Minimum-version here is about accepting
+        # them, not about weakening anything.
+        self.ssl_context.minimum_version = _ssl.TLSVersion.TLSv1_2
+        self.ssl_context.load_cert_chain(
+            os.environ.get("SOURAN_TLS_CERT",
+                           "/opt/souran-ai/config/doh.pem"),
+            os.environ.get("SOURAN_TLS_KEY",
+                           "/opt/souran-ai/config/doh.key"))
+        super().__init__(*a, **kw)
+
     def get_request(self):
         sock, addr = self.socket.accept()
-        import ssl as _ssl
-        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain(os.environ.get("SOURAN_TLS_CERT",
-                                           "/opt/souran-ai/config/doh.pem"),
-                            os.environ.get("SOURAN_TLS_KEY",
-                                           "/opt/souran-ai/config/doh.key"))
         try:
-            return ctx.wrap_socket(sock, server_side=True), addr
+            return self.ssl_context.wrap_socket(sock, server_side=True), addr
         except OSError:
+            # A failed handshake must not take the listener down: close
+            # this socket and ask the server to retry accept().
             try:
                 sock.close()
             except OSError:
