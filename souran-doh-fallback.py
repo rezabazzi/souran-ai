@@ -733,6 +733,81 @@ def resolve(qname: str, qtype: int = 1):
 # --------------------------------------------------------------------------
 # TCP front-end speaking DNS to local clients
 # --------------------------------------------------------------------------
+def _edns_bufsize(data: bytes) -> int:
+    """Return the UDP payload size the client advertised via EDNS0, else 0.
+
+    The size lives in the CLASS field of the OPT pseudo-RR (type 41) in the
+    additional section, not in the header's NSCOUNT/ARCOUNT. Reading it from
+    the header made a normal EDNS query look like it advertised a 1-byte
+    buffer, which forced needless truncation.
+    """
+    try:
+        if len(data) < 12:
+            return 0
+        arcount = struct.unpack("!H", data[10:12])[0]
+        off = 12
+        qd = struct.unpack("!H", data[4:6])[0]
+        for _ in range(qd):
+            while True:
+                ln = data[off]
+                if ln == 0:
+                    off += 1
+                    break
+                if ln & 0xC0 == 0xC0:
+                    off += 2
+                    break
+                off += 1 + ln
+            off += 4  # QTYPE + QCLASS
+        for _ in range(arcount):
+            while True:
+                ln = data[off]
+                if ln == 0:
+                    off += 1
+                    break
+                if ln & 0xC0 == 0xC0:
+                    off += 2
+                    break
+                off += 1 + ln
+            rtype, rclass, _ttl, rdlen = struct.unpack("!HHIH", data[off:off + 10])
+            off += 10
+            if rtype == 41:  # OPT
+                size = rclass & 0xFFFF
+                return size if 512 <= size <= 4096 else 0
+            off += rdlen
+    except (struct.error, IndexError):
+        return 0
+    return 0
+
+
+def _question_end(data: bytes) -> int:
+    """Offset just past the question section (used to echo it back verbatim).
+
+    Slicing the echo as ``12 + len(qname) + 5`` is wrong: an encoded name is
+    ``sum(1 + len(label)) + 1`` bytes because every label carries a length byte
+    and the name ends with a root zero byte, and the question then needs 4 more
+    bytes for QTYPE and QCLASS. For ``cloudflare.com`` that is 20 bytes, not 19
+    — the old slice truncated the QCLASS and clients rejected the message with
+    "malformed message packet".
+    """
+    try:
+        qd = struct.unpack("!H", data[4:6])[0]
+        off = 12
+        for _ in range(qd):
+            while True:
+                ln = data[off]
+                if ln == 0:
+                    off += 1
+                    break
+                if ln & 0xC0 == 0xC0:
+                    off += 2
+                    break
+                off += 1 + ln
+            off += 4  # QTYPE + QCLASS
+        return off
+    except (struct.error, IndexError):
+        return len(data)
+
+
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
         # Must exceed SOURAN_DOH_BUDGET so a slow-but-successful DoH
@@ -803,6 +878,10 @@ class UDPHandler(socketserver.BaseRequestHandler):
         if len(data) < 12:
             return
         _qid, flags, qd = struct.unpack("!HHH", data[:6])
+        # Offset just past the question section, so the TC/truncation reply can
+        # echo the question verbatim instead of re-deriving its length from the
+        # qname string (which was one byte short and corrupted the reply).
+        qd_end = _question_end(data)
         # Only QUERY (0); see the note in Handler.handle(). A non-QUERY
         # opcode must get NOTIMP, never a rewritten successful answer.
         if ((flags >> 11) & 0x0F) != 0:
@@ -836,10 +915,24 @@ class UDPHandler(socketserver.BaseRequestHandler):
                 answer[4:]
         # Never emit a reply larger than the client's advertised buffer;
         # set TC so the client retries over TCP instead of dropping.
-        udp_payload = data[3:4]  # placeholder to keep names clear
+        #
+        # v4.3.3 fixes two defects here, both visible to clients as
+        # "dig: Message parser reports malformed message packet" on any TXT
+        # set too large for UDP:
+        #   1. The echoed question was sliced as data[12:12+len(qname)+5].
+        #      An encoded name needs sum(1+len(label))+1 bytes (each label has a
+        #      length byte, plus a root zero byte) and the question then needs
+        #      4 more for QTYPE+QCLASS. For cloudflare.com that is 20 bytes, not
+        #      19 — the slice cut the final QCLASS byte and the client's parser
+        #      rejected the whole message.
+        #   2. client_buf was read from data[10:12], which is NSCOUNT+ARCOUNT,
+        #      not the advertised UDP payload size. A client sending EDNS with
+        #      NSCOUNT=0/ARCOUNT=1 made client_buf 1, so `len(resp) > 1` was
+        #      true for every reply and large-but-legal answers were truncated
+        #      needlessly. The real size lives in the EDNS0 OPT RR.
         try:
-            client_buf = struct.unpack("!H", data[10:12])[0] or 1232
-        except struct.error:
+            client_buf = _edns_bufsize(data) or 1232
+        except Exception:
             client_buf = 1232
         if len(resp) > max(512, client_buf):
             # RFC 1035 §4.1.1: an over-large UDP reply must be NOERROR with TC
@@ -847,8 +940,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
             # low 4 bits are rcode 2 (SERVFAIL), so the client saw a hard
             # failure instead of a truncation hint and dig reported
             # "Message parser reports malformed message packet".
-            resp = struct.pack("!HHHHHH", _qid, 0x8380, qd, 0, 0, 0) + \
-                data[12:12 + len(qname) + 5]
+            resp = struct.pack("!HHHHHH", _qid, 0x8380, qd, 0, 0, 0) + data[12:qd_end]
         try:
             sock.sendto(resp, self.client_address)
         except OSError:
