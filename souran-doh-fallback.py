@@ -363,7 +363,12 @@ def _doh_json(url: str, qname: str, qtype: int, timeout: float = 8.0):
     # _doh_throttle() and retried across all bootstrap IPs until the
     # deadline. Retrying blindly without a budget once took 12 s and made
     # the client give up even though DoH was reachable.
-    deadline = time.time() + float(os.environ.get("SOURAN_DOH_BUDGET", "12"))
+    # v4.3.2: the default was 12 s, but a single DoH round-trip costs
+    # 2.0-2.7 s here and _doh_throttle() spaces calls 0.9 s apart, so only
+    # ~3 attempts fit and the 4th is cut off mid-flight (curl rc=28). Under
+    # concurrent load that produced SERVFAIL for valid names. The unit sets
+    # SOURAN_DOH_BUDGET=20; this default keeps the module correct standalone.
+    deadline = time.time() + float(os.environ.get("SOURAN_DOH_BUDGET", "20"))
     last_rc = None
     blob_out = None
 
@@ -405,9 +410,24 @@ def _doh_json(url: str, qname: str, qtype: int, timeout: float = 8.0):
         doc = json.loads(blob_out.decode("utf-8", "replace"))
     except Exception:
         return None
-    if doc.get("Status") != 0:
+    if doc.get("Status") not in (0, 3):
+        # 1 = FORMERR, 2 = SERVFAIL ... genuine upstream failure.
         return None
     return doc
+
+
+def _doh_is_nodata(doc) -> bool:
+    """True when DoH answered NOERROR but the name has no record of this type.
+
+    A NODATA answer is a VALID, authoritative result (the zone exists, the
+    requested type does not) and must not be treated as a lookup failure.
+    v4.3.2 conflated it with failure: `_doh_get` returned None for an empty
+    Answer list, so _resolve_uncached fell through to its final
+    `return payload if payload else None`, which handed the client tier 1's
+    SERVFAIL packet. Measured: race0.example.org returns SERVFAIL locally while
+    the authoritative DoH answer is Status 0 with an SOA in Authority.
+    """
+    return bool(doc) and doc.get("Status") == 0 and not (doc.get("Answer") or [])
 
 
 def _doh_get(url: str, qname: str, qtype: int, timeout: float = 8.0):
@@ -647,6 +667,16 @@ def _resolve_uncached(qname: str, qtype: int):
                 _cache_put((qname.lower(), qtype), good, 120)
                 return good, True
 
+        # v4.3.2: DoH answered, but with no record of the requested type. That
+        # is an authoritative NODATA, not a failure — and answering it correctly
+        # is what stops tier 1's SERVFAIL from leaking to the client.
+        _doc = _doh_json(url, qname, qtype)
+        if _doh_is_nodata(_doc):
+            STATS["nodata"] = STATS.get("nodata", 0) + 1
+            good = build_nodata(qname, qtype)
+            _cache_put((qname.lower(), qtype), good, 120)
+            return good, True
+
     STATS["fail"] += 1
     return payload if payload else None, False
 
@@ -675,7 +705,14 @@ def resolve(qname: str, qtype: int = 1):
             _inflight[key] = ev
 
     if not leader:
-        ev.wait(timeout=12)
+        # v4.3.2: the follower waited a flat 12 s while the leader's DoH budget
+        # was ALSO 12 s. A cold lookup costs 2.0-2.7 s per DoH attempt (measured
+        # on this link), so under load the leader exhausts its budget at almost
+        # exactly the moment followers time out — every thread then reported
+        # failure and the client saw SERVFAIL even though DoH was reachable.
+        # Followers must wait longer than the leader's worst case.
+        wait_s = float(os.environ.get("SOURAN_DOH_BUDGET", "12")) + 10.0
+        ev.wait(timeout=wait_s)
         got = _cache_get(key)
         if got:
             return got, True

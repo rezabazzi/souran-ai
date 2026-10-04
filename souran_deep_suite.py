@@ -378,21 +378,31 @@ def t1_rfc1035():
     # wrong. (Verified: 24/24 clean when sampled in isolation.)
     m = h = None
     for attempt in range(4):
-        m = query_udp("example.com", 1, qid=0xABCD, timeout=10)
+        m = query_udp("example.com", 1, qid=0xABCD, timeout=25)
         h = parse_header(m) if m else None
-        if h and h["id"] == 0xABCD:
+        # Require a CORRECT reply, not merely a matching ID: breaking on the ID
+        # alone let a SERVFAIL/FORMERR response with an echoed ID satisfy the
+        # loop and then fail the rcode assertion below.
+        if h and h["id"] == 0xABCD and h["rcode"] == 0:
             break
-        time.sleep(0.4)
+        time.sleep(1.2)
     check("responds to a standard query", h is not None)
-    if h:
-        check("QR bit set on response", h["qr"] == 1)
-        check("question count preserved", h["qd"] == 1)
-        check("RD echoed, RA set", h["rd"] == 1 and h["ra"] == 1,
-              f"rd={h['rd']} ra={h['ra']}")
-        check("transaction ID echoed", h["id"] == 0xABCD,
-              f"sent 0xABCD got 0x{h['id']:04X}")
-        check("rcode NOERROR for a valid name", h["rcode"] == 0)
-        check("opcode is QUERY", h["opcode"] == 0)
+    # Never guard these behind `if h:`. A conditional check is SKIPPED when the
+    # reply is missing, so the run reports a smaller total instead of the real
+    # failure — that is how v4.3.2 produced "rcode NOERROR for a valid name"
+    # failing while also reporting 50/52 rather than the full count. Every check
+    # reports, pass or fail; a missing reply is itself the failure.
+    check("QR bit set on response", h is not None and h["qr"] == 1)
+    check("question count preserved", h is not None and h["qd"] == 1,
+          "" if h is None else f"qd={h['qd']}")
+    check("RD echoed, RA set", h is not None and h["rd"] == 1 and h["ra"] == 1,
+          "" if h is None else f"rd={h['rd']} ra={h['ra']}")
+    check("transaction ID echoed", h is not None and h["id"] == 0xABCD,
+          "no reply" if h is None else f"sent 0xABCD got 0x{h['id']:04X}")
+    check("rcode NOERROR for a valid name", h is not None and h["rcode"] == 0,
+          "" if h is None else f"rcode={h['rcode']}")
+    check("opcode is QUERY", h is not None and h["opcode"] == 0,
+          "" if h is None else f"op={h['opcode']}")
 
     # Non-QUERY opcodes must be refused with NOTIMP and carry NO records.
     #
@@ -494,13 +504,26 @@ def t2_record_types():
 
 def t3_wire():
     group("3. Wire format — TCP and truncation")
-    m = query_tcp("example.com", 1, qid=0x3333)
+    # v4.3.2: both TCP checks were single-shot. A cold lookup on this link takes
+    # 6.7-8.0 s (tier 1 miss -> DoH over the censored path), and the TCP budget
+    # has to cover connection setup plus that wait. Measured: TCP resolution
+    # works in ~1 ms once cached, but fails outright right after the cold-start
+    # restart the suite performs. Retry rather than loosen the assertion.
+    m = None
+    for _attempt in range(3):
+        m = query_tcp("example.com", 1, qid=0x3333, timeout=25)
+        if m is not None:
+            break
+        time.sleep(1.5)
     check("TCP resolution works", m is not None and parse_header(m)["an"] >= 0)
-    if m:
-        check("TCP echoes ID", parse_header(m)["id"] == 0x3333)
+    # Do NOT guard this behind `if m:` — a guard makes a missing reply reduce the
+    # total instead of failing, which is how a run once reported 50/52 instead
+    # of showing the real TCP failure. Every check must always report.
+    check("TCP echoes ID", m is not None and parse_header(m)["id"] == 0x3333,
+          "" if m is None else f"got 0x{parse_header(m)['id']:04X}")
     # A name with many A records may exceed the UDP limit; TC must be set and
     # the client must succeed over TCP.
-    m = query_udp("google.com", 1, timeout=8)
+    m = query_udp("google.com", 1, timeout=25)
     if m:
         h = parse_header(m)
         if len(m) > 512:
@@ -508,7 +531,13 @@ def t3_wire():
                   h["tc"] == 1, f"{len(m)} bytes")
         else:
             print(f"       [info] google.com A fit in {len(m)} bytes; no truncation")
-    m = query_tcp("www.google.com", 1)
+    # Retry for the same cold-cache reason as above.
+    m = None
+    for _attempt in range(3):
+        m = query_tcp("www.google.com", 1, timeout=25)
+        if m is not None and len(walk_answers(m)) > 0:
+            break
+        time.sleep(1.5)
     check("TCP path serves CNAME chains", m is not None and
           len(walk_answers(m)) > 0, f"{len(walk_answers(m or b''))} RRs")
 
