@@ -625,6 +625,85 @@ def t8_config():
               (flags_udp & 0x0F) == 0, f"rcode={flags_udp & 0x0F}")
 
 
+def t10_web3():
+    group("10. Web3 / ENS resolution")
+    sys.path.insert(0, "/opt/souran-ai")
+
+    # Keccak must be Keccak, not NIST SHA3. Every ENS bug in v4.2 traced back
+    # to this: hashlib.sha3_256 is a DIFFERENT hash (0x06 vs 0x01 padding), so
+    # namehash was wrong and lookups silently returned nothing.
+    try:
+        from souran_keccak import keccak256
+        node = b"\x00" * 32
+        for label in reversed("eth".split(".")):
+            node = keccak256(node + keccak256(label.encode()))
+        check("keccak256 != sha3_256 (correct padding variant)",
+              node.hex() == "93cdeb708b7545dc668eb9280176169d1c33cfd8ed6f04690a0bcc88a93fc4ae",
+              f"namehash('eth')={node.hex()[:16]}...")
+    except Exception as exc:
+        check("keccak256 != sha3_256 (correct padding variant)", False,
+              f"{type(exc).__name__}: {exc}")
+        return
+
+    try:
+        import souran_web3_resolver as w3
+    except Exception as exc:
+        check("web3 resolver imports", False, f"{type(exc).__name__}: {exc}")
+        return
+
+    # The namehash must cover the FULL name including the TLD.
+    try:
+        full = w3._namehash("vitalik.eth")
+        stripped = w3._namehash("vitalik")
+        check("ENS namehash includes the .eth TLD",
+              full != stripped and full.startswith("0x") and len(full) == 66,
+              f"{full[:14]}...")
+    except Exception as exc:
+        check("ENS namehash includes the .eth TLD", False, str(exc)[:60])
+
+    # ABI address decoding: Solidity LEFT-pads an address to 32 bytes, so the
+    # real address is the LAST 20 bytes. Slicing the first 20 (v1.0.0) yields a
+    # truncated address that looks plausible.
+    try:
+        padded = "0x000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa96045"
+        check("ABI address takes the last 20 bytes",
+              w3._abi_to_address(padded) == "0xd8da6bf26964af9d7eed9e03e53415d37aa96045",
+              w3._abi_to_address(padded))
+        check("ABI zero address rejected as 'unset'",
+              w3._abi_to_address("0x" + "0" * 64) == "", "empty")
+    except Exception as exc:
+        check("ABI address takes the last 20 bytes", False, str(exc)[:60])
+
+    # The registry address must be the REGISTRY, not the Public Resolver.
+    check("ENS registry address is correct (not the Public Resolver)",
+          w3.ENS_REGISTRY.lower() == "0x00000000000c2e074ec69a0dfb2997ba6c7d2e1e",
+          w3.ENS_REGISTRY)
+
+    # Live end-to-end: ENS must return a real address, not [].
+    try:
+        addrs = w3.resolve_ens("vitalik.eth")
+        check("ENS resolves a real address (live RPC)",
+              bool(addrs) and addrs[0].startswith("0x") and len(addrs[0]) == 42,
+              ",".join(addrs[:1]) or "empty")
+    except Exception as exc:
+        check("ENS resolves a real address (live RPC)", False,
+              f"{type(exc).__name__}: {str(exc)[:70]}")
+
+    # The service API must agree with the library.
+    try:
+        import json as _json
+        import urllib.request as _u
+        with _u.urlopen("http://127.0.0.1:8086/api/web3/ens?name=vitalik.eth",
+                        timeout=45) as r:
+            doc = _json.loads(r.read().decode())
+        check("web3 API returns the address (not an empty list)",
+              bool(doc.get("addresses")),
+              ",".join(doc.get("addresses") or []) or "empty")
+    except Exception as exc:
+        check("web3 API returns the address (not an empty list)", False,
+              f"{type(exc).__name__}: {str(exc)[:60]}")
+
+
 def t9_resilience():
     group("9. Resilience — degraded modes")
     # DoT tier down: plain DNS must keep working.
@@ -662,7 +741,7 @@ def main() -> int:
     print("=" * 66 + "\033[0m")
     started = time.time()
     for fn in (t1_rfc1035, t2_record_types, t3_wire, t4_abuse, t5_concurrency,
-               t7_integrity, t8_config, t6_cold_start, t9_resilience):
+               t7_integrity, t8_config, t10_web3, t6_cold_start, t9_resilience):
         try:
             fn()
         except Exception as exc:

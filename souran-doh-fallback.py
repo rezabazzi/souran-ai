@@ -502,8 +502,15 @@ def _rdata_from_text(qtype: int, data: str):
                 return None
             return struct.pack("!HHH", int(parts[0]), int(parts[1]), int(parts[2])) \
                 + _encode_name(parts[3].rstrip("."))
-        if qtype in (64, 65):                       # SVCB / HTTPS
-            return _encode_name(data.rstrip("."))
+        if qtype in (64, 65):
+            # SVCB/HTTPS rdata is NOT a bare name: it is
+            #   priority(uint16) target(name) params(...)
+            # and `data` here is just the target name, so emit a minimal
+            # ServiceMode presentation with priority 1 and no params.
+            # v4.3 returned `_encode_name(data)` alone, which produced a
+            # packet whose first two bytes were the length of the first
+            # label — structurally wrong even though it sometimes parsed.
+            return struct.pack("!H", 1) + _encode_name(data.rstrip("."))
     except (ValueError, struct.error, OSError):
         return None
     return None
@@ -576,8 +583,8 @@ def _resolve_uncached(qname: str, qtype: int):
             # this, an empty A answer masked a working MX/TXT answer and the
             # client got a bogus empty reply.
             if rcode == 0:
-                useful = (has_answer_of_type(payload, qtype)
-                          or not any(True for _r, _d, _t in iter_answers(payload)))
+                has_rrs = any(True for _r, _d, _t in iter_answers(payload))
+                useful = has_answer_of_type(payload, qtype)
                 poisoned = bool(ips) and any(is_poison(ip) for ip in ips)
                 if useful and not poisoned:
                     STATS["primary"] += 1
@@ -585,10 +592,23 @@ def _resolve_uncached(qname: str, qtype: int):
                     return payload, False
                 if poisoned:
                     STATS["poisoned"] += 1   # never cache or serve an injected answer
+                elif has_rrs:
+                    # Answer holds RRs, just not the requested type. That is a
+                    # real NODATA/CNAME-chain situation — trust it (e.g. a
+                    # CNAME-only answer for a query the client will follow).
+                    STATS["primary"] += 1
+                    _cache_put((qname.lower(), qtype), payload, 300)
+                    return payload, False
                 else:
-                    # Empty answer for a type the client wants: fall through
-                    # to Tier 2 rather than serving an empty reply.
-                    pass
+                    # Tier 1 answered NOERROR with an EMPTY answer section.
+                    #
+                    # unbound does this for a name whose NS/TXT it could not
+                    # complete on this DPI'd link (observed: google.com NS/TXT
+                    # return 0 RRs instantly while DoH returns the real
+                    # records). Trusting that empty reply hides data that IS
+                    # available, so fall through to the encrypted tier instead
+                    # of serving a hollow answer.
+                    STATS["nodata"] = STATS.get("nodata", 0) + 1
             elif rcode == 3:
                 # Genuine NXDOMAIN — authoritative, serve as-is (negative cache).
                 STATS["primary"] += 1

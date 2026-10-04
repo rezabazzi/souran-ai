@@ -5,6 +5,64 @@ All notable changes to the Souran AI Network Server project will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.3.1] - 2026-10-04
+
+### Fixed
+- **DNS name-compression parser corrupted every compressed answer.** The v4.3
+  `_decode_name()` followed a compression pointer and then kept looping,
+  re-reading the pointed-to bytes as further labels. On a normal reply such as
+  `c00c 0001 0001 000000fa 0004 681084e5` the cursor advanced to 40 instead of
+  34, so type/class/ttl/rdlen were all read 6 bytes early — a 4-byte A record
+  reported rdlen=1 and the parser raised a bogus "rdata overrun", which the
+  front-end then escalated to DoH. A pointer now terminates the name.
+- **Empty tier-1 answers were served as authoritative.** When unbound replied
+  NOERROR with an empty answer section (which it does for `google.com` NS/TXT
+  on this DPI'd link, while DoH returns the real records), the empty reply was
+  cached and returned, hiding data that was actually available. Empty answers
+  now fall through to the encrypted tier.
+- **SVCB/HTTPS rdata was structurally invalid.** `_rdata_from_text()` returned a
+  bare encoded name, but SVCB/HTTPS rdata is `priority(uint16) target(name)
+  params(...)`. Now emits a valid ServiceMode presentation.
+- **ENS was completely non-functional** (five separate bugs, all silent):
+  1. `_keccak256()` used `hashlib.sha3_256` under the comment "sha3_256 IS
+     keccak256". False — they differ in the domain-separation byte (0x06 vs
+     0x01), so every namehash was wrong.
+  2. pycryptodome is unusable here (Debian installs to `Cryptodome`, shadowed by
+     this interpreter's 3.14 dist-packages), so a verified pure-stdlib
+     Keccak-f[1600] was added in `souran_keccak.py`.
+  3. `_namehash()` mixed types — it called `bytes.fromhex()` on `_keccak256()`,
+     which returns bytes, raising ValueError on every name.
+  4. `resolve_ens()` stripped `.eth` before hashing; ENS namehash must cover the
+     FULL name including the TLD.
+  5. The registry contract address was wrong (it used the Public Resolver), so
+     every `resolver()` call reverted. Also, ABI addresses are LEFT-padded to 32
+     bytes and the old code sliced the FIRST 20 chars, yielding a truncated
+     address; it now takes the last 20.
+  - Also: the single hardcoded ETH RPC endpoint now returns HTTP 301, so
+    lookups failed. Multiple endpoints are tried in turn, via `curl` (Python's
+    TLS ClientHello is DPI-reset here, same constraint as the DoH tier).
+  - Verified live: vitalik.eth -> 0xd8da6bf26964af9d7eed9e03e53415d37aa96045,
+    etherscan.eth -> 0xcefcc00a025d6bcc259d082c883144c36c17903f.
+- **Web3 and gaming units had no proxy environment**, so their outbound HTTPS
+  could not leave the host. Added `10-proxy.conf` drop-ins.
+- **fwupd-refresh** failed repeatedly (HTTP 503 from lvfs). Same missing-proxy-env
+  cause; fixed with `/etc/systemd/system/fwupd-refresh.service.d/10-proxy.conf`.
+
+### Added
+- ByeDPI (hufrea/byedpi, GPL-3.0) built from source and installed as `ciadpi`
+  with a `byedpi` alias, plus `souran-byedpi.service` on 127.0.0.1:1080.
+  **Honest status: non-functional on this host** — its TLS ClientHello parser
+  rejects modern handshakes (`ss: invalid version: 0x43`) on every request,
+  with or without desync flags. See `censorship/README.md`. The working DPI
+  bypass on this machine remains zapret (nfqws/tpws) at the netfilter queue,
+  which never parses TLS.
+- `souran_keccak.py` — pure-stdlib Keccak-256, verified against the canonical
+  ENS vector namehash('eth').
+- `censorship/README.md` — per-tool install/status table with measured evidence,
+  including why GoodbyeDPI cannot run (Windows-only: requires WinDivert).
+- Test suite 46 -> 53 assertions, including a Web3/ENS section (keccak variant,
+  TLD inclusion, ABI padding, registry address, live ENS, API agreement).
+
 ## [4.3.0] - 2026-10-04
 
 ### Fixed

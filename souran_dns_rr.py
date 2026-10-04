@@ -66,9 +66,26 @@ ADDRESS_TYPES = frozenset({_A, _AAAA})
 
 
 def _decode_name(data: bytes, offset: int):
-    """Decode a (possibly compressed) DNS name. Returns (labels, new_offset)."""
+    """Decode a (possibly compressed) DNS name. Returns (labels, new_offset).
+
+    The returned offset is the position in THIS message just past the encoded
+    name — which for a compression pointer is 2 bytes, not the end of the
+    name it points at.
+
+    v4.3 bug: this function followed a compression pointer and then kept
+    looping, re-reading bytes at the pointed-to offset as if they were more
+    labels. On a reply like
+
+        c00c 0001 0001 000000fa 0004 681084e5
+
+    the pointer at offset 32 was followed to offset 12, parsing "cloudflare"
+    and "com" again and advancing the cursor to 40 instead of 34. Every
+    subsequent field (type, class, ttl, rdlen) was then read 6 bytes early, so
+    a 4-byte A record reported rdlen=1 and the parser raised a bogus
+    "rdata overrun" — which the front-end then escalated to DoH. Fix: a pointer
+    terminates the name.
+    """
     labels = []
-    jumped = False
     end = offset
     guard = 0
     while True:
@@ -78,24 +95,25 @@ def _decode_name(data: bytes, offset: int):
         length = data[end]
         if length == 0:
             end += 1
-            break
-        if length & 0xC0 == 0xC0:  # compression pointer
+            return labels, end
+        if length & 0xC0 == 0xC0:          # compression pointer
             if end + 1 >= len(data):
                 raise ValueError("truncated pointer")
+            # The name ends HERE; the pointer's 2 bytes are consumed and the
+            # target is only followed to collect labels.
             ptr = ((length & 0x3F) << 8) | data[end + 1]
-            if not jumped:
-                end += 2
-            jumped = True
             if ptr >= len(data):
                 raise ValueError("bad pointer")
-            end = ptr
-            continue
+            sub_labels, _ = _decode_name(data, ptr)
+            labels.extend(sub_labels)
+            return labels, end + 2
+        if length & 0xC0:                 # reserved label type
+            raise ValueError("reserved label type")
         end += 1
         if end + length > len(data):
             raise ValueError("truncated label")
         labels.append(data[end:end + length])
         end += length
-    return labels, end
 
 
 def _encode_name(name: str) -> bytes:
