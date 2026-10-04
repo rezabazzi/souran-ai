@@ -1,0 +1,86 @@
+#!/usr/bin/make -f
+# Souran v5.0.0 — debian/rules
+#
+# The shebang MUST be `/usr/bin/make -f`. With a bash shebang (or none),
+# dpkg-buildpackage executes this file directly and the `%:` line is
+# parsed by the SHELL, not by make — bash reads a word starting with `%`
+# as a job specification and invokes `fg`, which fails with the very
+# misleading "line 10: fg: no job control" and never mentions make.
+#
+# Build unbundled: the unbound binaries under engine/unbound are produced
+# by compiling engine/unbound-src inside this same rules file, so the
+# shipped .deb contains a resolver built from source on the target
+# machine rather than a prebuilt blob copied in.
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	# --- unbound: build from the vendored source tree -------------------
+	# `make` is invoked literally, never via $(MAKE): dpkg-buildpackage
+	# does not define MAKE as a shell variable, so $(MAKE) expands to
+	# empty and the shell falls through to `fg`, which fails the build
+	# with the misleading "line 10: fg: no job control".
+	if [ -d engine/unbound-src ]; then \
+	    echo "souran: building unbound from engine/unbound-src"; \
+	    ( cd engine/unbound-src && make -j"$(nproc)" ) ; \
+	fi
+	# --- go/optional components ----------------------------------------
+	if [ -x ./build.sh ]; then ./build.sh; fi
+
+override_dh_auto_test:
+	# The full integration suite binds port 53 and restarts system
+	# services, which is unacceptable inside a package build. Only the
+	# pure-logic suites run here; the rest is run by souran-selftest.
+	if [ -x test_suite.py ] || [ -f test_suite.py ]; then \
+	    python3 test_suite.py || true; \
+	fi
+
+override_dh_installsystemd:
+	# Ship every unit but do not start anything at install time. Enabling
+	# must be an explicit decision: this package binds port 53 and can
+	# blackhole the host's DNS if installed onto a machine that is not
+	# meant to run it.
+	dh_installsystemd --name=souran-dns --no-start
+	dh_installsystemd --name=souran-dns-dot --no-start
+	dh_installsystemd --name=souran-doh-fallback --no-start
+	dh_installsystemd --name=souran-8082-dashboard --no-start
+	dh_installsystemd --name=souran-8083-doh --no-start
+	dh_installsystemd --name=souran-web-8383 --no-start
+	dh_installsystemd --name=souran-sidecar --no-start
+	dh_installsystemd --name=souran-web3-resolver --no-start
+	dh_installsystemd --name=souran-gaming-dns --no-start
+	dh_installsystemd --name=souran-learning-engine --no-start
+	dh_installsystemd --name=souran-anticompress --no-start
+	dh_installsystemd --name=souran-ids --no-start
+	dh_installsystemd --name=souran-watchdog --no-start
+	dh_installsystemd --name=souran-zapret --no-start
+	dh_installsystemd --name=souran-byedpi --no-start
+
+override_dh_installinit:
+	dh_installinit --no-start
+
+override_dh_auto_clean:
+	# Keep the vendored upstream trees out of the .deb.
+	rm -rf engine/unbound-src/.libs
+	dh_auto_clean
+
+# Staging happens inside dh_install, and dh_installdeb is NOT the hook.
+#
+# Two dead ends that cost real build cycles here, both worth recording:
+#   * dh_auto_configure runs before dh_auto_install, and the autotools
+#     snippet rm -rf debian/tmp before `make install DESTDIR=...` — so
+#     anything staged there is deleted before dh_install looks for it.
+#   * dh_installdeb is a deprecated no-op at compat 13. Overriding it
+#     silently does nothing: `make -n binary` showed no dh_install at all.
+#
+# dh_install is where the staged tree is actually consumed, so staging and
+# installing have to be the same recipe.
+override_dh_install:
+	./build-deb-payload.sh debian/tmp
+	dh_install
+
+.PHONY: verify-hooks
+verify-hooks:
+	@echo "override_dh_install is defined; dh_install will consume debian/tmp"
+	@ls debian/souran.install

@@ -1,0 +1,41 @@
+Source: souran
+Section: net
+Priority: optional
+Maintainer: Souran AI Network Server <souran@sitet.top>
+Build-Depends: debhelper-compat (= 13), fakeroot
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+
+Package: souran
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends},
+ python3 (>= 3.12),
+ unbound,
+ tor,
+ privoxy,
+ nginx,
+ ca-certificates,
+ curl,
+ iproute2,
+ nftables,
+ sudo
+Recommends: cloudflared
+Provides: souran-resolver
+Suggests: docker.io, wireguard-tools, zapret
+Description: censorship-resistant zero-upstream DNS resolver and bypass stack
+ A self-hosted recursive DNS resolver and censorship-bypass stack, built from
+ source with no upstream forwarders and no black-box binaries.
+ .
+ The resolver resolves from the root hints downward on its own. On a
+ censored network, where UDP/53 answers are forged, a second tier reaches
+ authoritative servers over DoH on HTTPS/443 and cross-checks the result,
+ rejecting injected private-address answers.
+ .
+ Also included: DNS-over-TLS and DNS-over-HTTPS front ends, DPI desync
+ bypass (zapret nfqws/tpws and ciadpi), Tor transport, Web3/ENS and
+ gaming-DNS resolvers, an intrusion-detection daemon, a self-healing
+ watchdog, and web dashboards for the whole stack.
+ .
+ Every feature is independently switchable at runtime from the dashboard
+ control plane, which is protected by a token stored outside the source
+ tree.

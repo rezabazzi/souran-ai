@@ -1,0 +1,4 @@
+opt/souran-ai
+usr/lib/systemd/system/souran-*.service
+usr/lib/systemd/system/souran-backup.timer
+usr/lib/systemd/system/socks-bridge.service

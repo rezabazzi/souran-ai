@@ -1,0 +1,24 @@
+#!/bin/sh
+# Souran v5.0.0 — prerm
+set -e
+
+case "$1" in
+    remove|deconfigure)
+        # Stop our units explicitly. The package never enabled them, but an
+        # operator may have, and an upgrade must not leave a resolver
+        # running while its files are being replaced.
+        for u in souran-doh-fallback souran-dns souran-dns-dot \
+                 souran-sidecar souran-watchdog; do
+            if [ -f "/etc/systemd/system/$u.service" ]; then
+                systemctl stop "$u.service" >/dev/null 2>&1 || true
+            fi
+        done
+        # Release :53 so another resolver can take it immediately rather
+        # than waiting for the socket to time out.
+        sleep 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

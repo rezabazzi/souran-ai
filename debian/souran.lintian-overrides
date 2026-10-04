@@ -1,0 +1,34 @@
+# Souran v5.0.0 — lintian override rationale
+#
+# dir-or-file-in-opt: DELIBERATE, not an oversight.
+#
+# Debian policy reserves /opt for locally-built add-on software that is not
+# managed by the package manager. This package deliberately does not comply,
+# for reasons that are structural rather than lazy:
+#
+#  1. The install layout is already load-bearing across the whole project.
+#     13 systemd units, 16 Python modules and every config file reference
+#     /opt/souran-ai by absolute path. Relocating to /usr/lib/souran would
+#     mean rewriting all of them, and a single missed path produces a
+#     resolver that appears installed but silently fails to serve DNS.
+#
+#  2. The existing deployment is already at /opt/souran-ai. Installing this
+#     package over a running instance must not create a second copy of the
+#     resolver at a different path, where the units and the files would
+#     disagree about where the resolver lives.
+#
+#  3. The package is an appliance for a single host, not a library intended
+#     for general Debian distribution. It Conflicts with bind9 and dnsmasq
+#     and claims port 53; it is not something that should be co-installed
+#     into a general-purpose system.
+#
+# The remaining two tags are consequences of the same choice and follow
+# from it directly:
+#   non-etc-file-marked-as-conffile — because the config files deliberately
+#     live beside the binaries rather than in /etc.
+#   no-code-sections on libunbound.a — a static archive shipped only so the
+#     resolver's shared object can be rebuilt; it is never linked at runtime.
+
+dir-or-file-in-opt
+non-etc-file-marked-as-conffile
+no-code-sections

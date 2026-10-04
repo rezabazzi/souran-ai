@@ -1,4 +1,4 @@
-#!/home/reza/.hermes/tools/python-3.14.7+202****0901-linux-x64/bin/python3
+#!/usr/bin/python3
 """
 Souran DNS Sidecar Service v3.0.0
 Port: 9192

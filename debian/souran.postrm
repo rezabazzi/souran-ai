@@ -1,0 +1,23 @@
+#!/bin/sh
+# Souran v5.0.0 — postrm
+set -e
+
+case "$1" in
+    purge)
+        # The API token is a credential generated on THIS host at install
+        # time. It must go on purge, or a reinstall silently reuses a
+        # token that may since have been rotated and leaked.
+        rm -f /etc/souran/api-token
+        rmdir /etc/souran 2>/dev/null || true
+        # Do NOT remove /opt/souran-ai here: purge semantics allow it, but
+        # the config/ tree may hold operator edits worth keeping. dpkg
+        # leaves the tree; `--purge` above only removes what we generated.
+        ;;
+    remove)
+        # Leave everything in place for a reinstall. Nothing to do.
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

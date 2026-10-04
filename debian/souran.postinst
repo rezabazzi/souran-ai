@@ -1,0 +1,92 @@
+#!/bin/sh
+# Souran v5.0.0 — postinst
+set -e
+
+case "$1" in
+    configure)
+        # The `unbound` package provides the system account the resolver
+        # drops privileges to. Without it the resolver cannot start and
+        # every DNS query on the box fails, so refuse to pretend the
+        # install succeeded.
+        if ! getent group unbound >/dev/null 2>&1; then
+            groupadd -r unbound || true
+        fi
+        if ! getent passwd unbound >/dev/null 2>&1; then
+            useradd -r -g unbound -d /opt/souran-ai/engine/unbound \
+                    -s /usr/sbin/nologin unbound || true
+        fi
+
+        # Fresh TLS keys on the target. The build host's private keys are
+        # deliberately NOT shipped in the .deb (see build-deb-payload.sh),
+        # so DoT has nothing to serve with until these exist.
+        for pair in souran doh; do
+            dir=/opt/souran-ai/config
+            mkdir -p "$dir"
+            if [ ! -s "$dir/$pair.key" ] || [ ! -s "$dir/$pair.pem" ]; then
+                openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+                    -subj "/CN=souran.local/O=Souran AI Network Server" \
+                    -keyout "$dir/$pair.key" -out "$dir/$pair.pem" \
+                    >/dev/null 2>&1 || true
+                [ -f "$dir/$pair.key" ] && chmod 0640 "$dir/$pair.key"
+                [ -f "$dir/$pair.pem" ] && chmod 0644 "$dir/$pair.pem"
+            fi
+        done
+
+        # The resolver binds :53, which is privileged. Grant ONLY the bind
+        # capability rather than running the service as root.
+        for b in /opt/souran-ai/engine/unbound/sbin/unbound; do
+            [ -x "$b" ] && setcap 'cap_net_bind_service=+ep' "$b" 2>/dev/null || true
+        done
+
+        # Control-plane token. Created once, root/service-owned 0600, and
+        # deliberately never shipped inside the package.
+        if [ ! -s /etc/souran/api-token ]; then
+            install -d -m 0750 /etc/souran
+            TOKEN="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 43)"
+            printf '%s\n' "$TOKEN" > /etc/souran/api-token
+            chmod 0600 /etc/souran/api-token
+            chown root:root /etc/souran/api-token 2>/dev/null || true
+            echo "souran: API token generated at /etc/souran/api-token"
+            echo "souran: read it with:  sudo cat /etc/souran/api-token"
+        fi
+
+        # Port 53 conflict detection.
+        #
+        # This package does NOT hard-Conflicts with dnsmasq/bind9 any
+        # more. Forcing a conflict was wrong: dnsmasq also provides DHCP
+        # and TFTP, which the Souran watchdog actively monitors, so
+        # removing it to satisfy dpkg would silently break a feature the
+        # operator depends on. Instead, detect the real problem — another
+        # resolver already holding :53 — and say so loudly at install time
+        # rather than letting every lookup fail mysteriously later.
+        if command -v ss >/dev/null 2>&1; then
+            OTHER="$(ss -tulpn 2>/dev/null | awk '$5 ~ /:53$/ {print $NF}' \
+                     | grep -oE 'users:\(\("[^"]+"' | sort -u \
+                     | grep -v '"python3"' || true)"
+            if [ -n "$OTHER" ]; then
+                echo "souran: WARNING — another process already holds port 53:"
+                echo "souran:   $OTHER"
+                echo "souran: Souran's resolver will fail to bind until that is"
+                echo "souran: stopped. Check:  sudo ss -tulpn 'sport = :53'"
+            fi
+        fi
+
+        # Nothing is enabled or started here on purpose. This package binds
+        # port 53; starting it unbidden on a machine that is not meant to
+        # run it would blackhole that host's DNS. Enable explicitly:
+        #
+        #   /opt/souran-ai/souran-enable-all
+        #
+        echo "souran: installed but NOT started (port 53 must not be claimed"
+        echo "souran: implicitly). Run /opt/souran-ai/souran-enable-all to activate."
+
+        # Non-interactive installs must not leave dpkg waiting on a prompt
+        # when a service cannot start; everything is disabled above, so
+        # there is nothing to wait for.
+        exit 0
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

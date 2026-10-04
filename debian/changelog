@@ -1,0 +1,36 @@
+souran (5.0.0) resolute; urgency=low
+
+  * Security: removed a plaintext sudo password that was embedded in six
+    source files and had already reached git history. Every call site now
+    uses sudo -n; the credential bought nothing because every unit runs
+    unprivileged.
+  * Security: added token authentication to the whole control plane. A
+    root-or-service-owned 0600 token is stored outside the source tree,
+    compared in constant time, and required for every control API route
+    except the health and docs paths. Loopback callers stay exempt so the
+    watchdog and test suites keep working.
+  * Packaging: first release as a .deb. unbound is compiled from the
+    vendored source during the build, so the shipped resolver is built
+    from source on the target rather than copied in as a binary.
+  * Packaging: TLS private keys and all *.bak / pre-* config snapshots are
+    excluded from the payload. A distributable package must not ship the
+    host's live private keys.
+
+ -- Hermes Agent <souran@sitet.top>  Sun, 04 Oct 2026 20:10:00 +0100
+
+souran (4.3.6) resolute; urgency=low
+
+  * Fixed the ground-truth oracle so MX and TXT answers are really
+    verified rather than assumed.
+  * Fixed truncated TXT replies corrupting the question section.
+  * Added a systemd unit for the ops sidecar; 19 API routes had been dead.
+
+ -- Hermes Agent <souran@sitet.top>  Sun, 04 Oct 2026 18:56:00 +0100
+
+souran (4.3.5) resolute; urgency=low
+
+  * Closed unauthenticated remote code execution on the sidecar /api/exec
+    endpoint, which accepted an arbitrary shell string on a
+    LAN-reachable port.
+
+ -- Hermes Agent <souran@sitet.top>  Sun, 04 Oct 2026 18:00:00 +0100

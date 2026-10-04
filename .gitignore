@@ -1,10 +1,13 @@
-# Credentials must never enter git
-dns/api-key.txt
-dns/auth.config
-*.key
-*.pem
-!**/doh.key.keep
-
-# Technitium-era runtime state (superseded by the zero-upstream stack)
-dns/cache.bin
-dns/apps/**/config.json
+debian/tmp/
+debian/souran/
+debian/.debhelper/
+debian/files
+debian/opt/
+debian/usr/
+debian/lib/
+.souran-stage/
+__pycache__/
+*.pyc
+config/*.key
+config/*.pem
+engine/unbound-src/
