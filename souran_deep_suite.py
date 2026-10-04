@@ -36,6 +36,80 @@ import time
 import urllib.error
 import urllib.request
 
+# ---------------------------------------------------------------------------
+# Single-instance lock.
+#
+# This suite is DESTRUCTIVE by design: it restarts souran-doh-fallback to test
+# a cold cache, and stops/starts souran-dns-dot to test degraded modes. Two
+# instances running concurrently therefore sabotage each other's service
+# state, and the losers report phantom failures that look exactly like product
+# bugs — observed on 2026-10-04 as four simultaneous runs producing 45/53,
+# 48/53, 49/53 and 53/53 on the very same unchanged code.
+#
+# A second instance now waits for the lock instead of corrupting the run.
+# ---------------------------------------------------------------------------
+# The suite normally runs as `reza`, which cannot write /run, so a lock there
+# would fail with OSError and silently degrade to "run unguarded" — exactly the
+# case this lock exists to prevent. Prefer a writable path and only use /run
+# when the suite is invoked as root.
+_LOCK_CANDIDATES = [
+    "/opt/souran-ai/data/.deep_suite.lock",
+    "/var/lock/souran_deep_suite.lock",
+    "/tmp/souran_deep_suite.lock",
+]
+_LOCK_PATH = next(
+    (p for p in _LOCK_CANDIDATES
+     if os.path.isdir(os.path.dirname(p)) and os.access(os.path.dirname(p), os.W_OK)),
+    "/tmp/souran_deep_suite.lock",
+)
+_LOCK_FH = None
+
+
+def acquire_instance_lock(timeout: float = 900.0) -> bool:
+    """Block until this process owns the suite lock. False if it cannot."""
+    global _LOCK_FH
+    deadline = time.time() + timeout
+    while True:
+        try:
+            fd = os.open(_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            _LOCK_FH = os.fdopen(fd, "w")
+            _LOCK_FH.write(f"pid={os.getpid()}\nstarted={time.time()}\n")
+            _LOCK_FH.flush()
+            return True
+        except FileExistsError:
+            # Reap a stale lock left by a killed run.
+            try:
+                with open(_LOCK_PATH) as f:
+                    pid = int(f.readline().split("=")[1].strip())
+                os.kill(pid, 0)
+            except (OSError, ValueError, IndexError):
+                try:
+                    os.unlink(_LOCK_PATH)
+                    continue
+                except OSError:
+                    pass
+            if time.time() > deadline:
+                print(f"  another suite instance holds {_LOCK_PATH}; "
+                      f"giving up after {timeout:.0f}s", flush=True)
+                return False
+            print("  another suite instance is running — waiting for it to "
+                  "finish (this suite restarts services; concurrent runs "
+                  "produce phantom failures)", flush=True)
+            time.sleep(15)
+        except OSError:
+            return True          # lock dir not writable: run unguarded
+
+
+def release_instance_lock() -> None:
+    global _LOCK_FH
+    try:
+        if _LOCK_FH:
+            _LOCK_FH.close()
+        if os.path.exists(_LOCK_PATH):
+            os.unlink(_LOCK_PATH)
+    except OSError:
+        pass
+
 sys.path.insert(0, "/opt/souran-ai")
 
 RESULTS: list = []
@@ -397,8 +471,25 @@ def t2_record_types():
           f"{len([r for r in txt if r[1] == 16])} TXT RR(s), "
           f"authoritative has {len(t_txt)}")
     # SOA for the zone must exist.
-    m = query_udp("google.com", 6)
-    check("SOA query answered", m is not None and parse_header(m)["rcode"] == 0)
+    #
+    # v4.3.2: this was a single 12 s query. Measured cold-lookup latency on this
+    # link is 6.7-8.0 s (a cache miss escalates tier 1 -> DoH over the censored
+    # path), so when the resolver had just been through a cache flush — which
+    # the earlier sections of this suite cause — the SOA check sat right at the
+    # edge of the timeout and intermittently failed. That is a test-timing
+    # artifact, not a resolver fault: the same query returns rcode 0 in ~1 ms
+    # once cached. Retry a few times, the way the TXT/MX checks above already
+    # do, and give each attempt room for a DoH escalation.
+    soa = None
+    soa_ok = False
+    for _attempt in range(3):
+        soa = query_udp("google.com", 6, timeout=25)
+        if soa is not None and parse_header(soa)["rcode"] == 0:
+            soa_ok = True
+            break
+        time.sleep(1.5)
+    check("SOA query answered", soa_ok,
+          "" if soa is None else f"rcode={parse_header(soa)['rcode']}")
 
 
 def t3_wire():
@@ -739,6 +830,10 @@ def main() -> int:
     print("\033[1m\033[36m" + "=" * 66)
     print(" SOURAN AI NETWORK SERVER v4.1.1 — DEEP PROTOCOL SUITE")
     print("=" * 66 + "\033[0m")
+    if not acquire_instance_lock():
+        print("\033[1m\033[31mSKIPPED: another suite instance is already "
+              "running.\033[0m", flush=True)
+        return 2
     started = time.time()
     for fn in (t1_rfc1035, t2_record_types, t3_wire, t4_abuse, t5_concurrency,
                t7_integrity, t8_config, t10_web3, t6_cold_start, t9_resilience):
@@ -762,4 +857,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Release the single-instance lock on every exit path, including an
+    # unhandled exception or a SIGINT, so a killed run cannot leave a stale
+    # lock that blocks every future run (it is reaped by pid-check, but not
+    # relying on that is better).
+    try:
+        sys.exit(main())
+    finally:
+        release_instance_lock()
