@@ -1,0 +1,23 @@
+# Version: v5.1.0 | Souran AI Network Server
+[Unit]
+Description=Souran Network Self-Healing Watchdog v4
+After=network-online.target souran-dns.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/bash /opt/souran-watchdog/souran-watchdog.sh run
+Restart=always
+RestartSec=10
+# The script already writes /var/log/souran-watchdog/watchdog_<date>.log
+# through its own log_* helpers. Redirecting stdout/stderr to a SECOND
+# file wrote every line twice and left an unrotated 36 MB legacy log.
+# journal is the right sink for anything the script did not log itself.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=souran-watchdog
+
+[Install]
+WantedBy=multi-user.target
