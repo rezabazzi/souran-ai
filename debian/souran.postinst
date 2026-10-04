@@ -103,7 +103,43 @@ case "$1" in
             chown root:root     /opt/souran-ai/config/souran-ca.key 2>/dev/null || true
             chmod 0640 /opt/souran-ai/config/doh.key    2>/dev/null || true
             chmod 0600 /opt/souran-ai/config/souran-ca.key 2>/dev/null || true
-            chown -R root:root /opt/souran-ai/logs 2>/dev/null || true
+            # (logs/ is chowned to unbound above -- it must be writable
+            #  by the account unbound drops to, for its own logfile.)
+            :
+
+            # The DNSSEC trust anchor is the exception, and getting this
+            # wrong is severe. unbound rewrites it when the anchor is
+            # rotated, so it must be writable by the account unbound drops
+            # to -- not merely readable. Left root:reza 0644 it fails with
+            #   fatal error: could not open autotrust file for writing
+            # tier-1 then stops listening on :5399 altogether, and every
+            # query that needs the DoH escalation tier (CAA among them)
+            # returns SERVFAIL. Measured, not predicted.
+            chown root:unbound /opt/souran-ai/engine/unbound-root.key 2>/dev/null || true
+            chmod 0664     /opt/souran-ai/engine/unbound-root.key 2>/dev/null || true
+
+            # ...and the DIRECTORY has to be writable by unbound too.
+            #
+            # unbound does not rewrite the anchor in place. It writes a
+            # temporary sibling first and renames it:
+            #     unbound-root.key.<pid>-<thread>-<hash>
+            # so the containing directory must be writable, not merely the
+            # file. With the directory left at reza:reza 0755 the
+            # resolver died on every start with
+            #     fatal error: could not open autotrust file for writing
+            # Measured impact: 60+ restart cycles, tier-1 never listening
+            # on :5399, so every query fell through to the DoH escalation
+            # tier and google.com returned NXDOMAIN.
+            #
+            # Setgid (2775) means files unbound creates there inherit the
+            # group instead of becoming its own.
+            chown root:unbound /opt/souran-ai/engine 2>/dev/null || true
+            chmod 2775     /opt/souran-ai/engine 2>/dev/null || true
+
+            # unbound redirects its own logging into logs/, so that
+            # directory must be writable by the account it drops to.
+            chown unbound:unbound /opt/souran-ai/logs 2>/dev/null || true
+            chmod 0775 /opt/souran-ai/logs 2>/dev/null || true
         fi
 
         # An UPGRADE must restore whatever was running before. A fresh

@@ -55,3 +55,15 @@ access-control: ::/0 allow
 
 remote-control:
     control-enable: no
+
+    # Own control interface.
+    #
+    # This instance used to inherit control-port 8953 from the same base
+    # config as tier-1, so the two competed for it and the loser exited:
+    #   can't bind socket: Address already in use for 127.0.0.1 port 8953
+    #   fatal error: could not open ports
+    # Measured effect: 54 restart cycles in a couple of minutes, tier-1
+    # down, and therefore EVERY query falling through to the DoH
+    # escalation tier and returning NXDOMAIN/SERVFAIL.
+    control-interface: 127.0.0.1
+    control-port: 8954
