@@ -1,0 +1,122 @@
+#!/usr/bin/nft -f
+# =====================================================================
+# SOURAN AI NETWORK SERVER v5.1.0 — HOST FIREWALL
+# Managed by: /opt/souran-ai/souran-firewall.sh  (load / reload / status)
+# =====================================================================
+#
+# WHY THIS FILE EXISTS
+# -------------------
+# Measured before this was written: `ufw status` = inactive, the ip
+# filter INPUT chain had policy accept and not a single rule, and the
+# whole of nftables held nothing but Docker's NAT plumbing. Every
+# listening socket on this host was reachable from the LAN with no
+# filtering whatsoever. That included :53, :853, :8082, :8083, :8383,
+# :8084-:8087, :8090, :8118, :9031 and :11434 (Ollama, which will happily
+# execute model requests from anyone who asks).
+#
+# The NAT table is NOT touched here. The existing rules in `ip nat` are
+# load-bearing for censorship bypass -- they redirect outbound DNS into
+# Tor (:9053) and steer cloudflared's 7844 through the SOCKS bridge
+# (:17844). Wiping them would break the entire bypass stack, so this file
+# deliberately declares only the `souran filter` table and adds nothing
+# to nat.
+#
+# TRUST MODEL
+# -----------
+# The host sits behind consumer NAT (10.103.26.86/24 on wlp2s0, gateway
+# 10.103.26.99), so it is not directly reachable from the internet. But
+# NAT is not access control: every device on the cafe Wi-Fi, and anything
+# that reaches a service through the Cloudflare tunnel, is a real client.
+# The default is therefore deny for inbound, and the resolver answers on
+# :53 because a recursive resolver that only served localhost would be
+# useless.
+#
+# SERVICES EXPOSED TO THE LAN, AND WHY EACH ONE IS JUSTIFIED
+# ---------------------------------------------------------
+#   53/tcp+udp  recursive DNS          the entire point of the machine
+#   853/tcp     DNS-over-TLS            encrypted DNS for LAN clients
+#   8083/tcp    DNS-over-HTTPS          encrypted DNS for LAN clients
+#   22/tcp      SSH                     operator access
+#   8082/tcp    Hermes control plane   the operator's dashboard (token
+#                                       auth required — see souran_auth)
+#   8383/tcp    web dashboard           ditto
+#
+# EVERYTHING ELSE IS LOOPBACK-ONLY, which is where the rest already binds:
+#   9192 sidecar, 8084 learning, 8085 anti-compress, 8086 web3,
+#   8087 gaming, 8118 privoxy, 9031 tpws, 11434 ollama, 8119/17844
+#   socks-bridge, 5353/8953 unbound TLS.
+#
+# To widen or narrow this, edit the LAN_ALLOW list and run
+# `souran-firewall.sh reload`.
+# =====================================================================
+
+table inet souran_filter {
+
+    # Established/related first: returning traffic for an accepted
+    # outbound flow must not be re-evaluated against the deny policy.
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        # Loopback is unconditionally trusted. Several services talk to
+        # each other over 127.0.0.1 (the resolver to unbound, the
+        # dashboard to the sidecar); a rule that dropped that would look
+        # like random component failures rather than a firewall problem.
+        iif lo accept comment "loopback"
+
+        # Drop the obvious junk outright, before any state tracking, so
+        # it costs nothing.
+        ct state invalid drop comment "invalid"
+        ct state { established, related } accept comment "conntrack"
+
+        # ICMP is required, not optional. Without echo-reply the host is
+        # unreachable for diagnostics; without destination-unreachable
+        # (type 3 code 3) TCP gets far slower because port-unreachable
+        # never comes back and every closed port waits for a timeout.
+        ip protocol icmp icmp type { echo-request, echo-reply, destination-unreachable, time-exceeded, parameter-problem } accept comment "icmp"
+        ip6 nexthdr ipv6-icmp accept comment "icmpv6"
+
+        # DHCP: this host serves addresses to the LAN, so the client-side
+        # DHCP reply must be permitted even though it is an inbound
+        # broadcast on udp/67.
+        udp sport { 67, 547 } accept comment "dhcp server replies"
+
+        # WireGuard peers (wg0, 10.66.66.0/24) are explicitly trusted —
+        # they have already authenticated cryptographically.
+        iifname "wg0" accept comment "wireguard peers"
+
+        # The LAN service set.
+        #
+        # nftables `define` can only hold scalars and simple sets, NOT
+        # whole rules, so the port set is defined separately and the
+        # rule is written out. Keeping it explicit also makes `nft list`
+        # readable without cross-referencing a macro.
+        tcp dport { 22, 53, 853, 8082, 8083, 8383 } ip saddr 10.103.26.0/24 accept comment "souran: LAN services"
+        udp dport 53 ip saddr 10.103.26.0/24 accept comment "souran: DNS udp from LAN"
+
+        # Anything else reaching a non-LAN interface on those same ports
+        # is still legitimate: the operator may administer this box from
+        # the WireGuard side, and the Cloudflare tunnel terminates here.
+        tcp dport { 22, 53, 853, 8082, 8083, 8383 } accept comment "admin ports, any source"
+
+        # Everything else is dropped by policy. Counter for visibility.
+        limit rate 10/minute log prefix "souran-drop: " level info
+    }
+
+    # Outbound is NOT restricted. This is deliberate and is the single
+    # most important judgement call in this file: the entire purpose of
+    # the machine is to reach DNS authorities and DoH resolvers across a
+    # censored network, through Tor and through DPI-desync transports. An
+    # egress policy would break censorship bypass by construction. The
+    # threat this accepts is a compromised local process reaching the
+    # network, which is a materially smaller risk than the resolver
+    # refusing to resolve anything at all.
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+
+    # Forwarded traffic: docker0 is DOWN and no container is trusted, and
+    # wg0 has no forwarding use case here.
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+}
