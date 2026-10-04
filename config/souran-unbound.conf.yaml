@@ -39,14 +39,29 @@ server:
     minimal-responses: no
     num-threads: 4
 
+    # Cache sizing is measured, not guessed (v5.1.0).
+    #
+    # These were 256/512/64/64 = 896 MB total. Measured actual unbound
+    # RSS on this host: 35 MB (core) + 22 MB (DoT instance). The cache
+    # was ~16x larger than anything the process actually used, on a
+    # machine with 7 GB total and only ~450 MB free -- so the config
+    # made unbound the prime OOM candidate for no benefit.
+    #
+    # Also measured: cachehits=5 / cachemiss=41 (10.9% hit ratio),
+    # expired=10 vs cachehits=5, and num.prefetch=0 on every thread
+    # despite prefetch: yes -- with serve-expired answering from stale
+    # entries, records never approach expiry and the prefetch trigger
+    # never arms. cache-min-ttl gives short-TTL CDN records a floor so a
+    # query can refresh them proactively.
+    #
     # Technitium-equivalent smart cache
-    msg-cache-size: 256m
-    rrset-cache-size: 512m
-    key-cache-size: 64m
-    neg-cache-size: 64m
+    msg-cache-size: 128m
+    rrset-cache-size: 256m
+    key-cache-size: 32m
+    neg-cache-size: 32m
     infra-cache-numhosts: 100000
     cache-max-ttl: 86400
-    cache-min-ttl: 0
+    cache-min-ttl: 30
     # A transient SERVFAIL must not be cached for half an hour.
     #
     # Measured: after a restart, MX for gmail.com returned SERVFAIL for
