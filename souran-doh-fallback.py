@@ -181,6 +181,33 @@ def is_poison(ip: str) -> bool:
 # --------------------------------------------------------------------------
 # Minimal DNS wire format (we only need build/parse for A/AAAA + passthrough)
 # --------------------------------------------------------------------------
+def _reply_flags(answer: bytes, query_flags: int) -> int:
+    """Build the reply header flags for a resolved answer.
+
+    Preserves the RCODE (low 4 bits) and the DNSSEC bits from the answer
+    being relayed, forces QR and RA, and echoes RD from the query.
+
+    Rebuilding the flags as QR|RA|RD from scratch -- which is what this
+    did before -- silently zeroed the RCODE, so every NXDOMAIN reached
+    the client as NOERROR. NXDOMAIN vs NODATA is semantically
+    significant: NXDOMAIN means the name does not exist at all, which is
+    what lets resolvers and applications apply negative caching and
+    detect a typo. Collapsing the two defeats negative caching and the
+    NXDOMAIN-redirect behaviour browsers rely on. The AD/CD bits are
+    carried through as well so a DNSSEC-validated answer is not silently
+    downgraded on its way to the client.
+    """
+    try:
+        ans_flags = struct.unpack("!H", answer[2:4])[0]
+    except (struct.error, IndexError):
+        ans_flags = 0
+    rcode = ans_flags & 0x000F          # NXDOMAIN, SERVFAIL, ...
+    ad = ans_flags & 0x0020             # DNSSEC "Authenticated Data"
+    cd = ans_flags & 0x0010             # DNSSEC "Checking Disabled"
+    rd = query_flags & 0x0100           # echo Recursion Desired
+    return 0x8000 | 0x0080 | rd | ad | cd | rcode
+
+
 def _encode_name(name: str) -> bytes:
     out = b""
     for label in name.rstrip(".").split("."):
@@ -429,17 +456,31 @@ def _doh_json(url: str, qname: str, qtype: int, timeout: float = 8.0):
 
 
 def _doh_is_nodata(doc) -> bool:
-    """True when DoH answered NOERROR but the name has no record of this type.
+    """True when DoH says the name does not exist (NXDOMAIN, Status 3).
 
-    A NODATA answer is a VALID, authoritative result (the zone exists, the
-    requested type does not) and must not be treated as a lookup failure.
-    v4.3.2 conflated it with failure: `_doh_get` returned None for an empty
-    Answer list, so _resolve_uncached fell through to its final
-    `return payload if payload else None`, which handed the client tier 1's
-    SERVFAIL packet. Measured: race0.example.org returns SERVFAIL locally while
-    the authoritative DoH answer is Status 0 with an SOA in Authority.
+    A NXDOMAIN is a VALID, authoritative negative answer -- the exact
+    opposite of a failure -- and it must be served as such.
+
+    This function previously only recognised Status 0 (NODATA) and so
+    treated every NXDOMAIN as a failed lookup. _resolve_uncached then fell
+    through to `return payload if payload else None`, handing the client
+    tier 1's SERVFAIL packet. Measured on this host: DoH answered
+    zzq7x2-nonexistent-souran-test.ir with Status 3 (correct), while
+    :53 returned SERVFAIL for that name on every attempt. A resolver that
+    cannot say "this name does not exist" is functionally broken even
+    though it looks healthy.
     """
-    return bool(doc) and doc.get("Status") == 0 and not (doc.get("Answer") or [])
+    return bool(doc) and doc.get("Status") == 3
+
+
+def _doh_is_true_nodata(doc) -> bool:
+    """True when DoH answered NOERROR (0) with no record of the type.
+
+    Distinct from NXDOMAIN: here the name exists, the requested type does
+    not. Both are authoritative answers; neither is a failure.
+    """
+    return (bool(doc) and doc.get("Status") == 0
+            and not (doc.get("Answer") or []))
 
 
 def _doh_get(url: str, qname: str, qtype: int, timeout: float = 8.0):
@@ -684,6 +725,16 @@ def _resolve_uncached(qname: str, qtype: int):
         # is what stops tier 1's SERVFAIL from leaking to the client.
         _doc = _doh_json(url, qname, qtype)
         if _doh_is_nodata(_doc):
+            # Authoritative NXDOMAIN: build a reply whose RCODE is 3 so
+            # the client can negative-cache and detect a typo, instead of
+            # inheriting tier 1's SERVFAIL.
+            STATS["nxdomain"] = STATS.get("nxdomain", 0) + 1
+            good = build_nodata(qname, qtype, nxdomain=True)
+            _cache_put((qname.lower(), qtype), good, 300)
+            return good, True
+        if _doh_is_true_nodata(_doc):
+            # Name exists but has no record of this type: NOERROR/NODATA
+            # with the SOA in AUTHORITY is the correct reply.
             STATS["nodata"] = STATS.get("nodata", 0) + 1
             good = build_nodata(qname, qtype)
             _cache_put((qname.lower(), qtype), good, 120)
@@ -865,7 +916,7 @@ class Handler(socketserver.BaseRequestHandler):
                 # Keep the original transaction ID and force QR|RD|RA so
                 # clients accept the reply. Rewrite bytes 0..3 only; the
                 # answer section must be passed through untouched.
-                new_flags = 0x8000 | 0x0080 | (flags & 0x0100)
+                new_flags = _reply_flags(answer, flags)
                 resp = struct.pack("!H", _qid) + struct.pack("!H", new_flags) + \
                     answer[4:]
             self.request.sendall(struct.pack("!H", len(resp)) + resp)
@@ -922,7 +973,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
             resp = struct.pack("!HHHHHH", _qid, 0x8182, qd, 0, 0, 0) + \
                 data[12:12 + len(qname) + 5]
         else:
-            new_flags = 0x8000 | 0x0080 | (flags & 0x0100)
+            new_flags = _reply_flags(answer, flags)
             resp = struct.pack("!H", _qid) + struct.pack("!H", new_flags) + \
                 answer[4:]
         # Never emit a reply larger than the client's advertised buffer;
@@ -1050,7 +1101,7 @@ class DoTHandler(socketserver.StreamRequestHandler):
                 resp = struct.pack("!HHHHHH", _qid, 0x8182, qd, 0, 0, 0) + \
                     msg[12:12 + len(qname) + 5]
             else:
-                new_flags = 0x8000 | 0x0080 | (flags & 0x0100)
+                new_flags = _reply_flags(answer, flags)
                 resp = struct.pack("!H", _qid) + struct.pack("!H", new_flags) + \
                     answer[4:]
             self.request.sendall(struct.pack("!H", len(resp)) + resp)

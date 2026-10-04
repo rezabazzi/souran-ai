@@ -223,10 +223,22 @@ def build_passthrough(qname: str, qtype: int, rrs, ttl: int = 300) -> bytes:
     return header + qname_enc + struct.pack("!HH", qtype, 1) + answers
 
 
-def build_nodata(qname: str, qtype: int) -> bytes:
-    """A correct NODATA (NOERROR, zero answers) response."""
+def build_nodata(qname: str, qtype: int, nxdomain: bool = False) -> bytes:
+    """A correct negative response.
+
+    Default: NODATA -- NOERROR with zero answers; the name exists but has
+    no record of this type.
+
+    nxdomain=True: NXDOMAIN -- the name does not exist at all. RCODE 3.
+
+    The two are semantically different and clients depend on the
+    distinction: NXDOMAIN enables negative caching and typo detection,
+    NODATA does not. Handing back a NOERROR for a name that does not
+    exist (or vice versa) is a correctness fault, not a cosmetic one.
+    """
     qname_enc = _encode_name(qname)
-    header = struct.pack("!HHHHHH", 0, 0x8180, 1, 0, 0, 0)
+    flags = 0x8183 if nxdomain else 0x8180   # QR RD RA + RCODE
+    header = struct.pack("!HHHHHH", 0, flags, 1, 0, 0, 0)
     return header + qname_enc + struct.pack("!HH", qtype, 1)
 
 
