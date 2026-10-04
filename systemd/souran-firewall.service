@@ -1,0 +1,24 @@
+# Version: v5.1.0 | Souran AI Network Server
+[Unit]
+Description=Souran host firewall (nftables)
+Documentation=file:/opt/souran-ai/config/souran-firewall.nft
+# Before network.target so the ruleset is in place before any service can
+# accept a connection; it does not need an interface to exist, it only
+# needs to be loaded first.
+Before=network.target network-online.target docker.service
+Wants=network-pre.target
+Conflicts=shutdown.target
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/souran-ai/souran-firewall.sh load
+ExecReload=/opt/souran-ai/souran-firewall.sh reload
+# If the ruleset is somehow missing at boot, load it; do not silently
+# continue unprotected.
+ExecStartPost=/bin/sh -c 'nft list table inet souran_filter >/dev/null 2>&1 || /opt/souran-ai/souran-firewall.sh load'
+
+[Install]
+WantedBy=multi-user.target

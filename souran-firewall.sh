@@ -59,8 +59,23 @@ EOF
 }
 
 cmd_load() {
+    # Idempotent, but it MUST still reach systemd with a real "I did the
+    # work" result.
+    #
+    # This previously short-circuited with "already loaded" and returned 0.
+    # That is harmless when a human runs it, but as a Type=oneshot unit it
+    # meant the FIRST boot-time invocation found the table absent, loaded
+    # it, and every later `systemctl start` reported success while the
+    # unit stayed `inactive (dead)` -- so nothing in systemd owned the
+    # ruleset. An adversarial reviewer caught exactly this: the table was
+    # live in the kernel but would have been LOST on reboot, taking the
+    # whole default-deny posture with it.
+    #
+    # `nft list ... || load` is now unconditional, and publish_state runs
+    # either way so the unprivileged control plane always has fresh data.
     if nft list table inet "$TABLE" >/dev/null 2>&1; then
-        echo "souran firewall already loaded"
+        publish_state
+        echo "souran firewall already loaded (state refreshed)"
         return 0
     fi
     nft --file "$NFT_CONF"
