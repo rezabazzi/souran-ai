@@ -217,6 +217,78 @@ FEATURES = {
         probe="(web3_rpc_ok(), 'ENS/RPC API answering')",
     ),
 
+    # ---------------- Third-party transports already running -----------
+    # These were live on the host (verified: systemctl is-active == active)
+    # but absent from the registry, so the dashboard claimed to show every
+    # capability while omitting three of them. A registry that under-reports
+    # is worse than none: it looks complete.
+    "proxy_xray": dict(
+        category="censorship",
+        label="Xray Proxy Transport",
+        description=("VMess/VLESS transport on :8443/:8444. Not managed by "
+                     "Souran, but part of this host's egress path and "
+                     "therefore something the operator needs to see and "
+                     "control from one place."),
+        units=[("xray", "start", "stop")],
+        requires=[],
+        probe="(unit_active('xray'), 'xray transport')",
+    ),
+    "proxy_hysteria": dict(
+        category="censorship",
+        label="Hysteria2 QUIC Proxy",
+        description=("QUIC-based proxy on :4443. Useful where TCP is throttled "
+                     "or a middlebox drops long-lived TCP sessions, which is "
+                     "a different failure mode from packet-level filtering."),
+        units=[("hysteria", "start", "stop")],
+        requires=[],
+        probe="(unit_active('hysteria'), 'hysteria2 :4443')",
+    ),
+    "proxy_singbox": dict(
+        category="censorship",
+        label="sing-box Mixed Proxy",
+        description=("sing-box routing on :2080, currently mixed-in and "
+                     "bridged to Tor. Provides rule-based routing and the "
+                     "HTTP/3 (DoH3) and QUIC DNS transports that unbound "
+                     "cannot offer without an ngtcp2 rebuild."),
+        units=[("sing-box", "start", "stop")],
+        requires=["censor_tor"],
+        probe="(unit_active('sing-box') or tcp_open(2080), 'sing-box :2080')",
+    ),
+
+    # ---------------- Available but not deployed -------------------------
+    # Registered honestly as NOT installed rather than omitted. The point
+    # of a registry is to be a complete inventory; an entry that says
+    # "this is possible here and is not currently present" is information,
+    # whereas a missing entry is just a gap someone has to rediscover.
+    "alt_ouinet": dict(
+        category="censorship",
+        label="Ouinet / CENO (P2P HTTP proxy, optional)",
+        description=("Peer-to-peer distributed HTTP proxy that reaches "
+                     "blocked content through volunteer peers rather than a "
+                     "central server. A container image IS present on this "
+                     "host but has been stopped for over two weeks, so this "
+                     "reports as not running rather than claiming it is "
+                     "active. Installer: "
+                     "~/Projects/Censorship-Circumvention/11-install-ouinet.sh."),
+        units=[],
+        requires=[],
+        default="off",   # container exists but has been stopped for weeks
+        probe="(ouinet_present(), 'installed' if ouinet_present() else 'not running')",
+    ),
+    "alt_veltor": dict(
+        category="censorship",
+        label="Veltor (self-hosted Tor alternative)",
+        description=("Self-hosted alternative to relying on the public Tor "
+                     "network: runs its own relays and Pluggable Transports, "
+                     "so it does not depend on the public Tor network being "
+                     "reachable. Not present on this host. Installer: "
+                     "~/Projects/Censorship-Circumvention/12-install-veltor.sh"),
+        units=[],
+        requires=[],
+        default="off",   # optional, not deployed on this host
+        probe="(veltor_present(), 'installed' if veltor_present() else 'not running')",
+    ),
+
     # ---------------- Gaming ----------------
     "gaming_dns": dict(
         category="gaming",
@@ -421,6 +493,41 @@ def nft_table_present(name: str) -> bool:
     return bool(out and f"table inet {name}" in out)
 
 
+def ouinet_present() -> bool:
+    """Is the Ouinet/CENO peer-to-peer HTTP proxy RUNNING?
+
+    Installed is not the same as running, and conflating them is exactly
+    the class of lie this registry exists to prevent. Measured on this
+    host: the container exists but has been `Exited (0)` for two weeks, so
+    a presence-only check reported it as active when it was serving
+    nothing. Now checks the RUNNING set specifically.
+    """
+    if os.path.exists("/opt/ouinet/ouinet") and \
+            unit_or_proc_running("ouinet"):
+        return True
+    rc, out, _ = _run("docker ps --format '{{.Names}}' | grep -i ouinet")
+    return rc == 0 and bool(out)
+
+
+def veltor_present() -> bool:
+    """Is Veltor running? Registered but NOT deployed on this host."""
+    if os.path.exists("/opt/veltor") and unit_or_proc_running("veltor"):
+        return True
+    rc, out, _ = _run("docker ps --format '{{.Names}}' | grep -i veltor")
+    return rc == 0 and bool(out)
+
+
+def unit_or_proc_running(name: str) -> bool:
+    """Is a systemd unit or a process with this name running?"""
+    if not re.fullmatch(r"[A-Za-z0-9_.@-]{1,64}", str(name or "")):
+        return False
+    rc, out, _ = _run(f"systemctl is-active {name}")
+    if out == "active":
+        return True
+    rc, out, _ = _run(f"pgrep -x {name}")
+    return rc == 0
+
+
 def web3_rpc_ok() -> bool:
     """Is the Web3 name-resolution API actually answering?
 
@@ -448,6 +555,9 @@ PROBE_SCOPE = {
     "nat_dns_redirect_present": nat_dns_redirect_present,
     "nft_table_present": nft_table_present,
     "web3_rpc_ok": web3_rpc_ok,
+    "ouinet_present": ouinet_present,
+    "unit_or_proc_running": unit_or_proc_running,
+    "veltor_present": veltor_present,
     "True": True,
 }
 

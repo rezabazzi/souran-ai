@@ -92,6 +92,9 @@ units_for() {
         censor_outbound_dns)  echo "" ;;
         web3_rpc)             echo "" ;;
         dns_dnssec_tor_note)  echo "" ;;
+        proxy_xray)           echo "xray" ;;
+        proxy_hysteria)        echo "hysteria" ;;
+        proxy_singbox)         echo "sing-box" ;;
         *)
             echo "refused: unknown feature '${FEATURE}'" >&2
             log REFUSE "feature=${FEATURE} unknown"
