@@ -853,6 +853,31 @@ def t9_resilience():
         check(f"{url.split('//')[1].split('/')[0]} still serving", code == 200,
               str(code))
 
+    # v4.3.5: the ops sidecar on loopback :9192 backs every feature toggle the
+    # dashboards advertise (tor binding, censorship bypass, gaming DNS, ENS,
+    # watchdog status). It had no systemd unit at all, so all 19 routes were
+    # connection-refused while every health check still passed. A dashboard
+    # whose buttons all fail must not report "healthy", so the sidecar is now
+    # asserted here.
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:9192/api/health", timeout=15) as r:
+            body = r.read(200).decode("utf-8", "replace")
+            code = r.status
+    except urllib.error.HTTPError as e:
+        body, code = "", e.code
+    except Exception:
+        body, code = "", 0
+    check("sidecar API :9192 serving", code == 200 and '"ok"' in body, str(code))
+    # No is_active() helper exists in this suite, so check the unit directly
+    # via the same systemd interface the rest of the stack is verified against.
+    try:
+        unit_state = subprocess.run(["systemctl", "is-active", "souran-sidecar"],
+                                    capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        unit_state = "unknown"
+    check("sidecar unit active", unit_state == "active",
+          f"{unit_state} — every dashboard toggle would fail")
+
 
 # ===========================================================================
 def main() -> int:

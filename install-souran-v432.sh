@@ -352,7 +352,7 @@ mkdir -p "$UNIT_DIR"
 # recovery required hand-reconstructing them.
 for u in souran-dns souran-doh-fallback souran-dns-dot souran-8082-dashboard \
          souran-web-8383 souran-web3-resolver souran-gaming-dns \
-         souran-learning-engine souran-ids; do
+         souran-learning-engine souran-ids souran-sidecar; do
   backup_file "$UNIT_DIR/${u}.service"
 done
 
@@ -533,9 +533,53 @@ make_unit souran-learning-engine \
 Environment=HTTPS_PROXY=http://127.0.0.1:8118
 Environment=NO_PROXY=localhost,127.0.0.1,::1"
 
+RUN_USER="reza"
+RUN_GROUP="adm"
 make_unit souran-ids \
   "Souran AI Intrusion Detection System" \
   "/usr/bin/python3 $SOURAN_DIR/intrusion-detection.py"
+
+# v4.3.5: souran-sidecar had NO unit at all, so 19 /api routes (tor and
+# censorship toggles, watchdog status, cloudflared status, ENS, gaming DNS)
+# answered connection-refused even though the dashboards advertise them.
+cat > "$UNIT_DIR/souran-sidecar.service" <<UNIT
+[Unit]
+Description=Souran AI Network Server — Ops Sidecar API (loopback :9192)
+After=network-online.target souran-doh-fallback.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=reza
+WorkingDirectory=$SOURAN_DIR
+# sidecar.py binds 127.0.0.1 and /api/exec uses a fixed argv allowlist.
+# It must NEVER be rebound to 0.0.0.0 — that was an RCE in v4.2.
+ExecStart=/usr/bin/python3 $SOURAN_DIR/sidecar.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=SOURAN_PROXY=http://127.0.0.1:8118
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=$SOURAN_DIR/data /var/log/souran-watchdog
+LimitNOFILE=65536
+MemoryMax=512M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=souran-sidecar
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+log "  unit: souran-sidecar.service"
+
+# The IDS writes to a log created by root; without group write it crash-loops
+# with PermissionError on every start.
+touch /var/log/souran-ids-alerts.log 2>/dev/null || true
+chown "$RUN_USER:$RUN_GROUP" /var/log/souran-ids-alerts.log 2>/dev/null || true
+chmod 0660 /var/log/souran-ids-alerts.log 2>/dev/null || true
 
 for u in souran-8082-dashboard souran-web-8383 souran-web3-resolver \
          souran-gaming-dns souran-learning-engine fwupd-refresh; do
@@ -598,7 +642,7 @@ elif (( STACK_LIVE && ! FORCE_RESTART )); then
 else
   for u in souran-dns souran-doh-fallback souran-dns-dot souran-8082-dashboard \
            souran-web-8383 souran-web3-resolver souran-gaming-dns \
-           souran-learning-engine souran-ids; do
+           souran-learning-engine souran-ids souran-sidecar; do
     systemctl enable "$u" >/dev/null 2>&1 || true
     systemctl restart "$u" 2>/dev/null || log "WARNING: $u failed to start"
   done

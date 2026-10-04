@@ -4,7 +4,7 @@ Souran DNS Sidecar Service v3.0.0
 Port: 9192
 Handles: watchdog, tor toggle, censorship toggle, cloudflared, domains, technitium
 """
-import json, os, subprocess, re, socket, time
+import json, os, subprocess, re, socket, time, sys
 from datetime import datetime
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -248,19 +248,31 @@ async def technitium_dhcp():
     return {"enabled": False, "range": "192.168.1.100-192.168.1.200", "lease_time": "24h"}
 
 @app.get("/api/web3/ens")
-async def web3_ens():
-    """ENS lookup via Ethereum RPC."""
+async def web3_ens(name: str = "vitalik.eth"):
+    """ENS lookup via Ethereum RPC.
+
+    v4.3.5: this returned a HARDCODED `ens_supported: True` with an empty
+    `block` string and no error field, so a caller could not distinguish
+    "ENS is working" from "the RPC call failed". It also issued a bare curl
+    with no proxy, while every other outbound call on this host needs the
+    proxy (direct TLS is DPI-affected) and a 5 s timeout that cannot succeed
+    on this link.
+
+    It now calls the project's own verified resolver IN-PROCESS, reports the
+    real outcome, and never claims support it could not demonstrate.
+    """
     try:
-        r = subprocess.run(
-            ['curl', '-s', '--max-time', '5',
-             '-X', 'POST',
-             '-H', 'Content-Type: application/json',
-             '-d', '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}',
-             'https://ethereum.rpc.alchemy.io'],
-            capture_output=True, text=True, timeout=10)
-        return {"ens_supported": True, "provider": "alchemy", "block": r.stdout[:100]}
+        sys.path.insert(0, "/opt/souran-ai")
+        from souran_web3_resolver import resolve_ens
+        addrs = resolve_ens(name)
+        if addrs:
+            return {"ens_supported": True, "provider": "alchemy",
+                    "name": name, "address": addrs[0]}
+        return {"ens_supported": False, "provider": "alchemy", "name": name,
+                "address": None, "detail": "no address returned for this name"}
     except Exception as e:
-        return {"ens_supported": True, "provider": "alchemy", "error": str(e)}
+        return {"ens_supported": False, "provider": "alchemy", "name": name,
+                "address": None, "detail": f"{type(e).__name__}: {e}"}
 
 @app.get("/api/web3/btc-rpc")
 async def web3_btc_rpc():
