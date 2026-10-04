@@ -31,15 +31,34 @@ import subprocess
 import sys
 import time
 
+# The test network deliberately lives INSIDE the LAN subnet that the
+# firewall allows. An earlier version used 10.99.99.0/24 and then had to
+# bolt a second address onto the namespace to impersonate a LAN source --
+# but the kernel kept selecting the first subnet as the preferred source,
+# so every "allowed" case failed while looking like a firewall fault.
+#
+# Building the namespace on the LAN subnet is both simpler and a more
+# honest test: the peer is then genuinely a device on the same Wi-Fi,
+# which is exactly the case the rules are written for.
 NS = "sourantest"
 VETH_HOST = "sth0"
 VETH_NS = "sthn0"
-HOST_IP = "10.99.99.1"
-NS_IP = "10.99.99.2"
-SUBNET = "10.99.99.0/24"
+HOST_IP = "10.103.26.254"
+NS_IP = "10.103.26.253"
+SUBNET = "10.103.26.0/24"
 
 BLOCKED = [11434, 8118, 8080, 8090, 8388, 54, 9192, 8084, 8085, 8086, 8087]
 ALLOWED = [53, 8082, 8383, 22]
+
+# The namespace this test builds lives on 10.99.99.0/24. The firewall
+# allows the LAN service set ONLY from the real LAN subnet, so this test
+# must impersonate a LAN source rather than assume any source is allowed.
+#
+# That distinction is the whole point of the rule: an earlier version had
+# `tcp dport {22,53,853,8082,8083,8383} accept` with no source
+# constraint, opening SSH and both control dashboards to every source on
+# every interface. Asserting from a non-LAN address is what catches that.
+LAN_SUBNET = "10.103.26.0/24"
 
 
 def sh(cmd, check=True):
@@ -53,6 +72,7 @@ def cleanup():
 
 
 def setup():
+    """Build the test namespace on the LAN subnet."""
     cleanup()
     sh(f"ip netns add {NS}")
     sh(f"ip link add {VETH_HOST} type veth peer name {VETH_NS}")

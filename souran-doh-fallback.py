@@ -1187,8 +1187,25 @@ def main():
             udp = UDPServer((LISTEN_HOST, LISTEN_PORT), UDPHandler)
             threading.Thread(target=udp.serve_forever, daemon=True).start()
         except OSError as exc:
-            print(f"[souran-doh-fallback] UDP :{LISTEN_PORT} unavailable "
-                  f"({exc}); TCP only", file=sys.stderr, flush=True)
+            # A silent UDP failure is a REAL outage, not a degradation.
+            #
+            # LAN stub resolvers overwhelmingly use UDP, so with UDP gone
+            # only TCP clients keep working while systemd still reports
+            # `active (running)` and every service-level health check
+            # passes. That makes the failure invisible precisely when it
+            # matters most -- e.g. :53/udp already held by another
+            # process after a restart.
+            #
+            # Exiting non-zero is deliberate: Restart=always then retries,
+            # and if the port is genuinely taken the unit ends up in
+            # `failed`, which IS visible, instead of limping along in a
+            # state nobody is alerted to.
+            print(f"[souran-doh-fallback] FATAL: cannot bind UDP "
+                  f":{LISTEN_PORT} ({exc}). Refusing to start TCP-only -- "
+                  f"LAN stub resolvers require UDP and a silent "
+                  f"half-working resolver is worse than a failed one.",
+                  file=sys.stderr, flush=True)
+            raise
 
     print(f"[souran-doh-fallback] DNS {LISTEN_HOST}:{LISTEN_PORT} "
           f"tcp+{'udp' if udp else 'tcp-only'} health :{LISTEN_PORT + 1} "

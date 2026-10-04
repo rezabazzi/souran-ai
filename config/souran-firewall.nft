@@ -75,10 +75,16 @@ table inet souran_filter {
         ip protocol icmp icmp type { echo-request, echo-reply, destination-unreachable, time-exceeded, parameter-problem } accept comment "icmp"
         ip6 nexthdr ipv6-icmp accept comment "icmpv6"
 
-        # DHCP: this host serves addresses to the LAN, so the client-side
-        # DHCP reply must be permitted even though it is an inbound
-        # broadcast on udp/67.
-        udp sport { 67, 547 } accept comment "dhcp server replies"
+        # DHCP, scoped correctly and to the LAN.
+        #
+        # The previous rule was `udp sport { 67, 547 }` — that permits
+        # packets whose SOURCE port is 67/547 from ANY destination port
+        # and any source, which is broader than intended and, being
+        # trivially spoofable, is not a meaningful restriction at all.
+        # Real DHCP traffic is: client -> server on dport 67, and server
+        # -> client on sport 67 to dport 68.
+        ip saddr 10.103.26.0/24 udp dport 67 accept comment "dhcp client requests from LAN"
+        ip saddr 10.103.26.0/24 udp sport 67 udp dport 68 accept comment "dhcp replies to LAN clients"
 
         # WireGuard peers (wg0, 10.66.66.0/24) are explicitly trusted —
         # they have already authenticated cryptographically.
@@ -93,10 +99,19 @@ table inet souran_filter {
         tcp dport { 22, 53, 853, 8082, 8083, 8383 } ip saddr 10.103.26.0/24 accept comment "souran: LAN services"
         udp dport 53 ip saddr 10.103.26.0/24 accept comment "souran: DNS udp from LAN"
 
-        # Anything else reaching a non-LAN interface on those same ports
-        # is still legitimate: the operator may administer this box from
-        # the WireGuard side, and the Cloudflare tunnel terminates here.
-        tcp dport { 22, 53, 853, 8082, 8083, 8383 } accept comment "admin ports, any source"
+        # NO blanket "admin ports, any source" rule.
+        #
+        # There was one, and it opened SSH plus BOTH control dashboards to
+        # every source address on every interface -- which contradicted
+        # this file's own header ("NAT is not access control"). Only the
+        # consumer NAT was preventing internet exposure.
+        #
+        # Administration from outside the LAN is still possible, and
+        # deliberately so, through the rule ABOVE: `iifname "wg0" accept`
+        # trusts authenticated WireGuard peers unconditionally, which is
+        # a far stronger check than a source port being open. The
+        # Cloudflare tunnel likewise terminates here over an outbound
+        # connection and does not need an inbound accept rule.
 
         # Everything else is dropped by policy. Counter for visibility.
         limit rate 10/minute log prefix "souran-drop: " level info
