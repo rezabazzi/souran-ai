@@ -10,6 +10,9 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
 import uvicorn
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import souran_auth
+
 app = FastAPI(title="Souran Sidecar", version="3.0.0")
 
 TOGGLE_FILE = "/opt/souran-ai/toggles.conf"
@@ -35,14 +38,29 @@ def save_toggle(key, value):
             f.write(f"{k}={v}\n")
 
 def run_souran_toggle(feature, state):
-    """Run souran-toggle with sudo password via stdin."""
+    """Run souran-toggle via sudo.
+
+    v5.0.0: this used to embed the operator's plaintext sudo password
+    ('<redacted>\\n') and pipe it to `sudo -S`. That is a plaintext credential
+    committed in a service file: anyone who could read the source, a core
+    dump, or a world-readable copy of this file owned the box. It also
+    did not even work for its purpose -- the unit already runs as User=reza
+    and reza holds NOPASSWD:ALL, so the credential was pure liability.
+
+    Now: invoke sudo with no prompt. If the account ever loses NOPASSWD,
+    the toggle degrades to a reported error instead of a silent wrong one.
+    """
+    if not re.fullmatch(r'[a-z0-9\-]{1,32}', str(feature or '')):
+        return "invalid feature name"
+    if str(state) not in ('on', 'off'):
+        return "invalid state"
     try:
-        subprocess.run(
-            ['sudo', '-S', '-p', '', '/opt/souran-ai/souran-toggle', feature, state],
-            input='<redacted>\n',
+        r = subprocess.run(
+            ['sudo', '-n', '/opt/souran-ai/souran-toggle', feature, state],
             capture_output=True, text=True, timeout=15,
-            check=True
         )
+        if r.returncode != 0:
+            return (r.stderr or r.stdout or f"exit {r.returncode}").strip()[:300]
         return True
     except Exception as e:
         return str(e)
@@ -293,7 +311,65 @@ async def gaming_dns():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "sidecar", "version": "3.0.0"}
+    return {"status": "ok", "service": "sidecar", "version": "5.0.0"}
+
+
+# --------------------------------------------------------------------------
+# AUTHENTICATION MIDDLEWARE (v5.0.0)
+# --------------------------------------------------------------------------
+# Before this, EVERY route above was reachable by anyone who could open a
+# TCP connection, with no credential check anywhere in the file. The app
+# binds 127.0.0.1 (v4.3.2), so the practical blast radius was "anything on
+# this host" — which includes every other process, every compromised web
+# app, and the agent runtime. Token auth makes the control plane an
+# explicit capability rather than ambient authority.
+#
+# Exempt paths are the two that a health prober needs to reach without a
+# credential: /api/health and /docs (FastAPI's interactive docs, which are
+# themselves harmless but were 404-ing behind auth on some clients).
+# Everything else, including every mutating route, requires the bearer
+# token unless it comes from loopback.
+@app.middleware("http")
+async def souran_auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if path in ("/api/health", "/docs", "/openapi.json", "/redoc"):
+        return await call_next(request)
+
+    host = request.client.host if request.client else ""
+    if not souran_auth.authorize(
+        host,
+        headers=dict(request.headers),
+        query=request.url.query,
+        cookies=request.cookies,
+    ):
+        return JSONResponse(
+            {"error": "unauthorized",
+             "detail": "supply the Souran API token as "
+                       "'Authorization: Bearer <token>' or '?token=<token>'",
+             "token_file": souran_auth.token_file_path()},
+            status_code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
+
+
+@app.get("/api/auth/state")
+async def auth_state():
+    """Report on the credential itself — part of the security surface."""
+    return souran_auth.audit_token_state()
+
+
+@app.post("/api/auth/rotate")
+async def auth_rotate():
+    """Rotate the API token. Takes effect immediately, no restart needed.
+
+    Because souran_auth re-reads the token file when its mtime changes,
+    every service picks the new value up on its next request. Existing
+    sessions are invalidated by design.
+    """
+    tok = souran_auth.write_token()
+    return {"status": "rotated", "path": souran_auth.token_file_path(),
+            "length": len(tok)}
 
 # SECURITY: /api/exec accepted an arbitrary shell string from a query
 # parameter and the app bound 0.0.0.0, so anyone who could reach :9192 had
