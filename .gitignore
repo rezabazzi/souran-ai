@@ -36,3 +36,13 @@ toggles.conf
 feature-state.json
 client-ca/
 __pycache__/
+
+# Rust/cargo build output (125 files, ~40 MB of .rlib/.rmeta).
+target/
+# Compiled resolver binaries. The .deb build compiles these from
+# engine/unbound-src, so committing prebuilt ones would contradict the
+# from-source claim; root.hints and unbound-root.key ARE tracked, since
+# they are data the resolver needs at runtime.
+engine/unbound/sbin/
+engine/unbound/lib/
+engine/unbound/include/

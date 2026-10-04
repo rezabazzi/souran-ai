@@ -1,24 +1,22 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-10-04T22:58:56.566522+00:00",
+  "updated_at": "2026-10-04T23:00:02.288641+00:00",
   "uptime_seconds": 0,
-  "cycles": 1716,
+  "cycles": 1718,
   "resolution": {
-    "total_queries": 1716,
-    "tier1_hits": 84,
-    "tier2_hits": 36,
-    "poison_blocked": 33,
+    "total_queries": 1718,
+    "tier1_hits": 107,
+    "tier2_hits": 39,
+    "poison_blocked": 35,
     "failures": 4,
     "latencies_ms": [],
     "top_domains": {}
   },
   "doh_endpoints": {
     "https://cloudflare-dns.com/dns-query": {
-      "success": 1548,
+      "success": 1550,
       "fail": 214,
       "latency_ms": [
-        1699.8,
-        973.2,
         1241.7,
         1740.2,
         1012.8,
@@ -216,15 +214,15 @@
         6730.8,
         837.6,
         767.2,
-        846.9
+        846.9,
+        3314.1,
+        771.3
       ]
     },
     "https://dns.google/resolve": {
-      "success": 1622,
+      "success": 1624,
       "fail": 140,
       "latency_ms": [
-        2281.1,
-        977.4,
         2655.7,
         1939.7,
         1084.4,
@@ -422,24 +420,24 @@
         640.0,
         777.0,
         727.9,
-        665.1
+        665.1,
+        866.7,
+        891.0
       ]
     }
   },
   "doh_best_endpoint": "https://dns.google/resolve",
   "censorship": {
-    "poisoned_answers": 33,
+    "poisoned_answers": 35,
     "censored_names_blocked": [],
     "first_seen": {},
     "blocked_by_tier": {
       "tier1": 0,
-      "tier2": 1084
+      "tier2": 1086
     }
   },
   "cache": {
     "hit_rate_history": [
-      0.286,
-      0.222,
       1.0,
       0.286,
       0.154,
@@ -537,7 +535,9 @@
       0.0,
       0.0,
       0.0,
-      0.0
+      0.0,
+      0.0,
+      0.091
     ],
     "recommended_ttl": 600,
     "prefetch_candidates": []
