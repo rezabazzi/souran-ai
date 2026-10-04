@@ -14,6 +14,25 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import souran_auth
 
 try:
+    import souran_technitium as technitium_client
+    _TECH_OK = True
+except Exception as _tech_exc:  # pragma: no cover
+    technitium_client = None
+    _TECH_OK = False
+    print(f"[sidecar] technitium client unavailable: {_tech_exc}",
+          file=sys.stderr, flush=True)
+
+
+async def _json_body(request: Request) -> dict:
+    """Parse a JSON body, tolerating an empty one."""
+    try:
+        data = await request.json()
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+try:
     import souran_features
     _FEATURES_OK = True
 except Exception as _feat_exc:  # pragma: no cover
@@ -240,35 +259,153 @@ async def domains_list():
                 domains.append(f.replace('.zone', ''))
     return {"domains": domains, "count": len(domains)}
 
+@app.get("/api/technitium/status")
+async def technitium_status():
+    """Is the Technitium DNS server actually reachable?
+
+    The previous /api/technitium/zones read *.zone files from a directory
+    that does not exist on this host, so it always reported an empty list
+    while appearing to work. It now reports the truth: whether the server
+    is up, and if not, why.
+    """
+    if not _TECH_OK:
+        raise HTTPException(503, "technitium client unavailable")
+    try:
+        doc = technitium_client.server_status(timeout=4)
+        return {"available": True, "base": technitium_client.DEFAULT_BASE,
+                "response": doc}
+    except technitium_client.TechnitiumError as e:
+        return {"available": False, "base": technitium_client.DEFAULT_BASE,
+                "error": str(e)[:300],
+                "detail": "Technitium DNS Server is not running; the "
+                          "Souran resolver (unbound + poison-proof front-end) "
+                          "is the active DNS path."}
+
+
 @app.get("/api/technitium/zones")
-async def technitium_zones():
-    zones_path = "/opt/souran-ai/dns/zones"
-    zones = []
-    if os.path.exists(zones_path):
-        for f in os.listdir(zones_path):
-            if f.endswith('.zone'):
-                with open(os.path.join(zones_path, f)) as fh:
-                    content = fh.read()
-                zones.append({"name": f.replace('.zone', ''), "records": len(content.splitlines())})
-    return {"zones": zones}
+async def technitium_zones(filterType: str = None, filterName: str = None):
+    """List authoritative zones. Real API call, or an honest 'not running'."""
+    if not _TECH_OK:
+        raise HTTPException(503, "technitium client unavailable")
+    try:
+        return technitium_client.list_zones(filterType, filterName)
+    except technitium_client.TechnitiumError as e:
+        raise HTTPException(502, str(e)[:300])
+
+
+@app.post("/api/technitium/zones")
+async def technitium_zone_create(request: Request):
+    """Create an authoritative zone."""
+    if not _TECH_OK:
+        raise HTTPException(503, "technitium client unavailable")
+    body = await _json_body(request)
+    zone = str(body.get("zone", "")).strip()
+    ztype = str(body.get("type", "Primary")).strip()
+    if not zone:
+        raise HTTPException(400, "zone is required")
+    try:
+        return technitium_client.create_zone(zone, ztype)
+    except technitium_client.TechnitiumError as e:
+        raise HTTPException(400, str(e)[:300])
+
+
+@app.delete("/api/technitium/zones")
+async def technitium_zone_delete(request: Request):
+    """Delete an authoritative zone."""
+    if not _TECH_OK:
+        raise HTTPException(503, "technitium client unavailable")
+    body = await _json_body(request)
+    zone = str(body.get("zone", "")).strip()
+    if not zone:
+        raise HTTPException(400, "zone is required")
+    try:
+        return technitium_client.delete_zone(zone)
+    except technitium_client.TechnitiumError as e:
+        raise HTTPException(400, str(e)[:300])
+
+
+@app.get("/api/technitium/records")
+async def technitium_records(domain: str, zone: str = None,
+                             listZone: bool = False):
+    """List DNS records for a domain within a zone."""
+    if not _TECH_OK:
+        raise HTTPException(503, "technitium client unavailable")
+    if not domain:
+        raise HTTPException(400, "domain is required")
+    try:
+        return technitium_client.get_records(domain, zone, listZone)
+    except technitium_client.TechnitiumError as e:
+        raise HTTPException(400, str(e)[:300])
+
+
+@app.post("/api/technitium/records")
+async def technitium_record_add(request: Request):
+    """Add a DNS record. Type is validated against the vendor vocabulary."""
+    if not _TECH_OK:
+        raise HTTPException(503, "technitium client unavailable")
+    body = await _json_body(request)
+    domain = str(body.get("domain", "")).strip()
+    rtype = str(body.get("type", "")).strip()
+    value = str(body.get("value", "")).strip()
+    if not domain or not rtype or not value:
+        raise HTTPException(400, "domain, type and value are all required")
+    try:
+        return technitium_client.add_record(
+            domain, rtype, value,
+            zone=(body.get("zone") or None),
+            ttl=(body.get("ttl") if body.get("ttl") not in (None, "") else None))
+    except technitium_client.TechnitiumError as e:
+        raise HTTPException(400, str(e)[:300])
+
+
+@app.delete("/api/technitium/records")
+async def technitium_record_delete(request: Request):
+    """Delete a DNS record. A/AAAA require ipAddress; NS requires nameServer."""
+    if not _TECH_OK:
+        raise HTTPException(503, "technitium client unavailable")
+    body = await _json_body(request)
+    try:
+        return technitium_client.delete_record(
+            str(body.get("domain", "")).strip(),
+            str(body.get("type", "")).strip(),
+            zone=(body.get("zone") or None),
+            ip_address=(body.get("ipAddress") or None),
+            name_server=(body.get("nameServer") or None))
+    except technitium_client.TechnitiumError as e:
+        raise HTTPException(400, str(e)[:300])
+
 
 @app.get("/api/technitium/settings")
 async def technitium_settings():
-    toggles = load_toggles()
-    return {
-        "server_name": "souran",
-        "version": "3.0.0",
-        "features": {
-            "dns": True,
-            "dot": True,
-            "doh": True,
-            "tor_binding": toggles.get('tor_binding', 'on') == 'on',
-            "censorship_bypass": toggles.get('censorship_bypass', 'on') == 'on',
-            "dnssec": toggles.get('dnssec', 'off') == 'on',
-            "cache": toggles.get('cache', 'on') == 'on',
-            "blocklists": toggles.get('blocklists', 'off') == 'on'
-        }
-    }
+    """DNS server settings. Real API call, or an honest 'not running'."""
+    if not _TECH_OK:
+        raise HTTPException(503, "technitium client unavailable")
+    try:
+        return technitium_client.get_dns_settings()
+    except technitium_client.TechnitiumError as e:
+        raise HTTPException(502, str(e)[:300])
+
+
+@app.post("/api/technitium/cache/flush")
+async def technitium_cache_flush():
+    if not _TECH_OK:
+        raise HTTPException(503, "technitium client unavailable")
+    try:
+        return technitium_client.flush_cache()
+    except technitium_client.TechnitiumError as e:
+        raise HTTPException(502, str(e)[:300])
+
+
+@app.get("/api/technitium/blocked")
+async def technitium_blocked(domain: str = None):
+    """Blocked-zone (blocklist) contents."""
+    if not _TECH_OK:
+        raise HTTPException(503, "technitium client unavailable")
+    try:
+        return technitium_client.blocked_list(domain)
+    except technitium_client.TechnitiumError as e:
+        raise HTTPException(502, str(e)[:300])
+
 
 @app.get("/api/technitium/dhcp")
 async def technitium_dhcp():
