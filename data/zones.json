@@ -1,0 +1,20 @@
+{
+  "sitet.top": {
+    "type": "forward",
+    "upstream": [],
+    "status": "active",
+    "created": "2025-01-01"
+  },
+  "cafenetmordad.ir": {
+    "type": "forward",
+    "upstream": [],
+    "status": "active",
+    "created": "2025-01-01"
+  },
+  "mordaddns.ir": {
+    "type": "forward",
+    "upstream": [],
+    "status": "active",
+    "created": "2025-01-01"
+  }
+}

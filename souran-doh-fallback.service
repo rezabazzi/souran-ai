@@ -1,0 +1,38 @@
+[Unit]
+# SOURAN AI NETWORK SERVER v4.0.0 — DoH fallback resolver tier
+Description=Souran AI Network Server — Poison-Proof DNS Tier (Port 53)
+Documentation=file:///opt/souran-ai/README.md
+After=network-online.target souran-dns.service
+Wants=network-online.target
+Requires=souran-dns.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/souran-ai
+ExecStart=/usr/bin/python3 /opt/souran-ai/souran-doh-fallback.py
+Restart=always
+RestartSec=3
+
+# DoH egress depends on the local censorship-bypass proxy: a direct TLS
+# connection to a DoH endpoint is reset (curl rc=35), while the same
+# request via 127.0.0.1:8118 succeeds. The service is useless without it.
+Environment=SOURAN_PROXY=http://127.0.0.1:8118
+Environment=SOURAN_PRIMARY_HOST=127.0.0.1
+Environment=SOURAN_PRIMARY_PORT=5399
+Environment=SOURAN_LISTEN_PORT=53
+Environment=SOURAN_DOT_PORT=853
+Environment=SOURAN_LISTEN_HOST=0.0.0.0
+Environment=SOURAN_DOH_HOST=cloudflare-dns.com
+Environment=SOURAN_DOH_URL=https://cloudflare-dns.com/dns-query
+Environment=SOURAN_DOH_URL2=https://dns.google/resolve
+Environment=SOURAN_DOH_BUDGET=12
+Environment=SOURAN_DOH_INTERVAL=0.9
+Environment=SOURAN_CLIENT_TIMEOUT=25
+LimitNOFILE=65536
+MemoryMax=512M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=souran-doh-fallback
+
+[Install]
+WantedBy=multi-user.target

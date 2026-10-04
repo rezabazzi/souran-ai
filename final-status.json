@@ -1,0 +1,44 @@
+{
+  "timestamp": "2026-09-28T06:40:00Z",
+  "version": "5.1.0",
+  "status": "OPERATIONAL",
+  "services": {
+    "souran-dns": "active",
+    "tor": "active", 
+    "souran-watchdog": "active"
+  },
+  "dashboards": {
+    "8081": {"name": "Web Dashboard", "status": 200, "version": "5.1.0"},
+    "8082": {"name": "Agent Control", "status": 200, "version": "2.2.0"},
+    "8083": {"name": "DoH Proxy", "status": 200, "version": "1.0.0"},
+    "8383": {"name": "Neuro Dashboard", "status": 200, "version": "2.0.0"}
+  },
+  "dns_resolution": {
+    "local": "working",
+    "test_google": "142.251.20.138"
+  },
+  "tor_bypass": {
+    "status": "working",
+    "ip": "160.119.249.240"
+  },
+  "authentication": {
+    "reza_user": "passwordless (NOPASSWD configured)",
+    "souranadmin_htpasswd": "configured"
+  },
+  "cleanups": {
+    "/etc/hosts": "cleaned - DNS poisoning entries (<redacted>) removed",
+    "git_repo": "/opt/souran-ai initialized"
+  },
+  "ports": [53, 8081, 8082, 8083, 8383, 9050, 53443, 5380],
+  "features": [
+    "Recursive DNS",
+    "DNSSEC", 
+    "DoT",
+    "DoH",
+    "Tor Bypass",
+    "Zero-Block Policy",
+    "Advanced Cache",
+    "Auto-Healing Watchdog",
+    "Agent Control Tools"
+  ]
+}

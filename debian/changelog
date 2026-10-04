@@ -1,3 +1,51 @@
+souran (5.1.0) resolute; urgency=medium
+
+  * Security: purged a plaintext sudo password that was embedded in six
+    source files and had already reached git history. Every call site now
+    uses sudo -n.
+  * Security: token authentication on the whole control plane. A
+    root-or-service-owned 0600 token lives outside the source tree, is
+    compared in constant time, and is required for every control route
+    except health and docs. Loopback stays exempt so the watchdog and test
+    suites keep working.
+  * Security: host firewall. INPUT policy drop, OUTPUT deliberately
+    unfiltered because an egress policy would break censorship bypass by
+    construction. The NAT table is never flushed -- it holds the outbound
+    DNS-to-Tor redirect the whole bypass stack depends on.
+  * Security: poison detection now handles IPv6. It was IPv4-only via
+    socket.inet_aton(), and the bare except swallowed the error, so every
+    AAAA address was classified clean -- including this network's forged
+    2001:4188:2:600:10:10:34:36, which is Telegram's real prefix with the
+    censor's IPv4 answer written into it as decimal groups.
+  * Security: the firewall no longer opens SSH and both dashboards to
+    every source on every interface, and the DHCP rule is no longer a
+    spoofable source-port match.
+  * Fix: NXDOMAIN was being destroyed. All three handlers rebuilt the
+    reply flags from scratch, zeroing the RCODE, so every NXDOMAIN reached
+    clients as NOERROR. A DoH NXDOMAIN was also treated as a lookup
+    failure, so the client was handed SERVFAIL instead.
+  * Fix: a malformed query produced NO reply at all, hanging clients for
+    their full timeout. Now an immediate FORMERR, including on the path
+    where the error builder itself raised on the over-long label.
+  * Fix: the DoT certificate had no subjectAltName, so Android Private
+    DNS, Windows DNS-over-HTTPS and macOS could not use encrypted DNS at
+    all. Replaced with a local root CA plus a leaf carrying DNS and IP
+    SANs, and DoTServer no longer builds a fresh SSLContext per accept.
+  * Fix: the watchdog issued 6 repair calls against a dns.service that
+    does not exist, logging 3,543 failures and sleeping as if it had
+    worked. It now restarts the units that own the resolver.
+  * Fix: the firewall was not owned by systemd and would have vanished on
+    reboot, silently removing all access control.
+  * Packaging: unbound is compiled from the vendored source during the
+    build. TLS private keys and all config snapshots are excluded from the
+    payload; the postinst generates fresh keys on the target.
+  * New: unified feature registry, 31 individually switchable features
+    with desired-vs-probed state and drift detection, exposed through a
+    control dashboard on :8082.
+  * New: cross-platform client for Windows, macOS, Linux and Android.
+
+ -- Hermes Agent <souran@sitet.top>  Sat, 04 Oct 2026 23:55:00 +0100
+
 souran (5.0.0) resolute; urgency=low
 
   * Security: removed a plaintext sudo password that was embedded in six

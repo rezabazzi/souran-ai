@@ -1,0 +1,183 @@
+# Build from Zero Source
+
+Use when building any network service from absolute zero source code with no pre-built binaries.
+
+## Overview
+
+Build complete system from freshly created source files, compile everything, verify all components work, and document the entire process. This is the standard for Souran AI Network Server development.
+
+## Procedure
+
+### 1. Source File Creation (FROM ZERO)
+
+Create ALL source files from scratch:
+
+**Rust Projects:**
+```bash
+mkdir -p /opt/project/src
+touch /opt/project/src/main.rs  # Create from ZERO
+touch /opt/project/src/lib.rs   # Create from ZERO
+cat > /opt/project/Cargo.toml << 'EOF'
+[package]
+name = "project-name"
+version = "0.1.0"
+edition = "2021"
+[[bin]]
+name = "binary-name"
+path = "src/main.rs"
+[dependencies]
+# Add only what's needed
+EOF
+```
+
+**Python Projects:**
+```bash
+mkdir -p /opt/project/scripts
+cat > /opt/project/scripts/service-name.py << 'EOF'
+#!/usr/bin/env python3
+# Code from ZERO
+EOF
+chmod +x /opt/project/scripts/*.py
+```
+
+### 2. Compilation & Build (FROM SOURCE)
+
+Compile everything from source with NO pre-built binaries:
+
+```bash
+cd /opt/project
+cargo clean    # Always start clean
+cargo build --release  # Compile from ZERO
+```
+
+### 3. Binary Installation
+
+Install compiled binary to system path:
+
+```bash
+sudo cp target/release/binary-name /usr/local/bin/
+sudo chmod +x /usr/local/bin/binary-name
+```
+
+### 4. Python Validation
+
+Verify all Python scripts:
+
+```bash
+python3 -m py_compile scripts/*.py
+# Verify modules load:
+python3 -c "import importlib.util; importlib.util.spec_from_file_location('name', 'path.py')"
+```
+
+### 5. Configuration Files
+
+Create configuration from source:
+
+```bash
+mkdir -p /etc/project/
+cat > /etc/project/config.toml << 'EOF'
+# Configuration from ZERO
+EOF
+```
+
+### 6. Systemd Services
+
+Create service files from source:
+
+```bash
+cat > /etc/systemd/system/project.service << 'EOF'
+[Unit]
+Description=Project built from source
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/binary-name
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+### 7. Documentation (FROM ZERO)
+
+Create complete documentation:
+
+```bash
+cat > /opt/project/CHANGELOG.md << 'EOF'
+# Changelog
+[version] - date
+### Added
+- Feature documentation
+EOF
+
+cat > /opt/project/BUILD_FROM_ZERO.md << 'EOF'
+# Build from Zero Summary
+- All sources created from zero
+- No pre-built binaries
+- Port assignments
+EOF
+```
+
+## Verification Checklist
+
+After build, verify EVERYTHING:
+
+- [ ] Source files exist (created from zero)
+- [ ] Binary compiled from source
+- [ ] No pre-built dependencies
+- [ ] All Python scripts syntax validated
+- [ ] All Python modules import successfully
+- [ ] Port configuration correct
+- [ ] Systemd services configured
+- [ ] Documentation complete
+- [ ] CHANGELOG updated with Git format
+
+## Pitfalls
+
+*Verify each component from source before claiming success* - the build may fail silently during compilation; always check actual binary files exist and are from your source code, not cached artifacts.
+
+*A binary that compiles doesn't mean it works* - always run a quick smoke test after installation to verify the compiled code actually executes and binds to the correct ports.
+
+*Python scripts need full syntax validation* - `python3 -m py_compile` catches syntax errors that can't be caught by inspection alone; a script that looks correct may have indentation or import errors.
+
+*Use cargo clean before every build from source* - stale build artifacts from previous builds can masquerade as successful compilations; always clean to ensure you're truly building from current source.
+
+*Document immediately after building* - the build state is fresh in mind; capture the actual file paths and versions while you know them, not after you've forgotten the exact configuration.
+
+## File Version Pattern
+
+Always follow GitHub standard versioning:
+- Version in source files: `v0.1.0`, `v1.0.0`, etc.
+- Use semantic versioning: MAJOR.MINOR.PATCH
+- Update CHANGELOG.md after every build
+- Include build timestamp in documentation
+
+## Port Configuration Standards
+
+For Souran AI Network Server:
+- **8083**: DoH Proxy (User's port)
+- **8082**: Hermes Agent (Assistant's port)  
+- **8383**: Web Dashboard (User's tools)
+- **53**: DNS Server (Tor zero-upstream)
+
+Always verify port configuration in source files and systemd service files.
+
+## Next Steps Template
+
+After successful build from zero:
+
+```bash
+# 1. Configure services
+sudo systemctl daemon-reload
+sudo systemctl enable project-{name}.service
+sudo systemctl start project-{name}.service
+
+# 2. Verify running
+systemctl status project-{name}.service
+curl http://localhost:{port}/health
+
+# 3. Test functionality
+# Run actual DNS queries, HTTP requests, etc.
+```

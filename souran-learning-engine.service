@@ -1,0 +1,31 @@
+[Unit]
+Description=Souran AI Network Server — Learning Engine (Port 8084)
+After=souran-doh-fallback.service souran-dns.service network-online.target
+Wants=network-online.target souran-doh-fallback.service
+
+[Service]
+Type=simple
+User=reza
+WorkingDirectory=/opt/souran-ai
+ExecStart=/usr/bin/python3 /opt/souran-ai/souran_learning_engine.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+# Direct egress to foreign DoH endpoints is DPI-reset on this host
+# (Connection reset by peer). Route through the local privoxy/Tor chain.
+# urllib honours these; without them every DoH probe fails.
+Environment=HTTP_PROXY=http://127.0.0.1:8118
+Environment=HTTPS_PROXY=http://127.0.0.1:8118
+Environment=http_proxy=http://127.0.0.1:8118
+Environment=https_proxy=http://127.0.0.1:8118
+# Local resolver/health endpoints must never go through the proxy.
+Environment=NO_PROXY=localhost,127.0.0.1,::1
+Environment=no_proxy=localhost,127.0.0.1,::1
+LimitNOFILE=65536
+MemoryMax=512M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=souran-learning
+
+[Install]
+WantedBy=multi-user.target

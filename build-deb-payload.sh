@@ -31,12 +31,17 @@ mkdir -p "$DEST" "$DEB/$LIBDIR/systemd/system" "$DEST/logs"
 # --- Python modules, metadata, control scripts --------------------------
 cp -a ./*.py "$DEST/"
 for f in VERSION CHANGELOG.md README.md souran-toggle toggles.conf \
-         install-souran.sh souran-enable-all; do
+         install-souran.sh souran-enable-all \
+         souran_auth.py souran_features.py souran_portmap.py \
+         souran_technitium.py souran_dashboard.py souran_client.py \
+         souran_dns_rr.py; do
+    # shellcheck disable=SC2086
     [ -e "$f" ] && cp -a "$f" "$DEST/" || true
 done
 
 # --- first-party trees --------------------------------------------------
-for d in agent anticompress bin scripts src systemd web tests; do
+for d in agent anticompress bin scripts src systemd web tests watchdog; do
+    # shellcheck disable=SC2086
     [ -d "$d" ] && cp -a "$d" "$DEST/"
 done
 
@@ -54,6 +59,13 @@ mkdir -p "$DEST/config"
 cp -a config/*.yaml "$DEST/config/" 2>/dev/null || true
 cp -a config/*.pem  "$DEST/config/" 2>/dev/null || true
 
+# --- firewall ruleset + control tooling ---------------------------------
+cp -a config/souran-firewall.nft "$DEST/config/" 2>/dev/null || true
+for f in souran-firewall.sh souran-feature-apply.sh souran-feature-executor.sh \
+         souran-certgen.sh; do
+    [ -f "$f" ] && cp -a "$f" "$DEST/" || true
+done
+
 # --- censorship config, dns config --------------------------------------
 if [ -d censorship/config ]; then
     mkdir -p "$DEST/censorship"
@@ -68,6 +80,9 @@ fi
 shopt -s nullglob
 for u in /etc/systemd/system/souran-*.service \
          /etc/systemd/system/souran-backup.timer \
+         /etc/systemd/system/souran-feature-executor.service \
+         /etc/systemd/system/souran-feature-executor.timer \
+         /etc/systemd/system/souran-firewall.service \
          /etc/systemd/system/socks-bridge.service; do
     cp -a "$u" "$DEB/$LIBDIR/systemd/system/"
 done
@@ -97,6 +112,10 @@ find "$DEST" -type f \( -name '*.sh' -o -name '*.py' \) -exec chmod 0755 {} + 2>
 chmod 0755 "$DEST/souran-enable-all" "$DEST/souran-toggle" 2>/dev/null || true
 chmod 0644 "$DEST"/VERSION "$DEST"/*.md 2>/dev/null || true
 
+mkdir -p "$DEST/run/feature-intents"
+chmod 0755 "$DEST/run" "$DEST/run/feature-intents"
+find "$DEST/run/feature-intents" -type f -delete 2>/dev/null || true
+
 touch "$DEST/logs/.keep"
 
 # --- scrub --------------------------------------------------------------
@@ -108,9 +127,20 @@ find "$DEB/opt" -name '*.pre[0-9]*' -delete 2>/dev/null || true
 
 # Hard fail if a private key ever made it into the payload. The root
 # trust anchor (unbound-root.key) is public data and is allowed.
-STRAY="$(find "$DEB/opt" -name '*.key' ! -name 'unbound-root.key' 2>/dev/null || true)"
+# Hard fail if a private key or a queued intent ever reaches the payload.
+#
+# Note the `find ... -print` form: without an explicit -print, an empty
+# result made the second append contribute a bare newline, and
+# `[ -n "$STRAY" ]` was then true for an EMPTY string -- so the guard
+# refused every build while printing nothing. Filtering empty lines with
+# grep -v '^$' and testing the result is what makes it reliable.
+STRAY="$( {
+    find "$DEB/opt" -name '*.key' ! -name 'unbound-root.key' -print 2>/dev/null
+    find "$DEB/opt" -path '*/feature-intents/*' -type f -print 2>/dev/null
+} | grep -v '^$' || true)"
 if [ -n "$STRAY" ]; then
-    echo "souran-deb: REFUSING TO PACKAGE — private keys staged:" >&2
+    echo "souran-deb: REFUSING TO PACKAGE — private keys or queued" >&2
+    echo "             intents staged in the payload:" >&2
     echo "$STRAY" >&2
     exit 1
 fi

@@ -1,5 +1,7 @@
 {
   "features": {
+    "alt_ouinet": "off",
+    "alt_veltor": "off",
     "blocklists": "off",
     "cache": "on",
     "censor_byedpi": "on",
@@ -28,10 +30,13 @@
     "ops_learning_engine": "on",
     "ops_sidecar_api": "on",
     "ops_watchdog": "on",
+    "proxy_hysteria": "on",
+    "proxy_singbox": "on",
+    "proxy_xray": "on",
     "tor_binding": "on",
     "web3_ens": "on",
     "web3_rpc": "on"
   },
   "migrated_from": "/opt/souran-ai/toggles.conf",
-  "updated_at": "2026-10-04T21:03:58.416160+00:00"
+  "updated_at": "2026-10-04T22:50:30.752148+00:00"
 }

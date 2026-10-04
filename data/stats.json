@@ -1,0 +1,19 @@
+{
+  "version": "5.2.0",
+  "port": 8383,
+  "service": "souran-web-dashboard",
+  "last_migrated": "2026-09-30T03:56:06.776861+00:00",
+  "features": [
+    "Recursive DNS",
+    "DNSSEC",
+    "DoT",
+    "DoH",
+    "Tor Bypass",
+    "Advanced Cache",
+    "Zero-Block Policy",
+    "Web Dashboard 8383",
+    "Hermes Agent 8082",
+    "DoH Server 8083",
+    "Neuro Analytics"
+  ]
+}

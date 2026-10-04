@@ -1,0 +1,20 @@
+[Unit]
+Description=Souran AI Network Server - Hermes Dashboard (Port 8082)
+After=network.target technitium.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=reza
+WorkingDirectory=/home/reza/souran-kb/scripts
+ExecStart=/usr/bin/python3 -m uvicorn souran_8082_routes:app --host 0.0.0.0 --port 8082
+Restart=always
+RestartSec=5
+Environment=TECHNITIUM_BASE=https://127.0.0.1:53443
+Environment=TECHNITIUM_TOKEN_FILE=/etc/dns/api-token.txt
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=souran-8082
+
+[Install]
+WantedBy=multi-user.target

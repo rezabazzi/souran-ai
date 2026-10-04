@@ -1,0 +1,77 @@
+# Souran DNS Resolver Configuration - v0.2.1
+# Zero-Upstream, Censorship-Resistant DNS Resolver
+
+[server]
+# Standard DNS port
+port = 53
+bind = "0.0.0.0"
+# Zero upstream - no forwarding, complete censorship resistance
+zero_upstream = true
+
+[resolver]
+# DNSSEC validation disabled for Tor compatibility
+dnssec_validation = false
+# Caching for performance on poor connections
+cache_size = "auto"
+# Serve stale when upstream fails
+serve_stale = true
+# Prefetch popular domains
+prefetch = true
+# Timeout for queries (5 seconds for poor connections)
+timeout = 5000
+# Parallel queries for fastest response
+parallel_queries = 3
+
+[forwarders]
+# No forwarders - direct resolution from root servers
+disabled = true
+
+[protocols]
+# All DNS protocols enabled
+udp = true
+tcp = true
+tls = true
+https = true
+quic = true
+
+[censorship_bypass]
+# Tor DNS bridge for censored domains
+tor_bridge = "127.0.0.1:9053"
+# Direct root server fallback
+root_servers = ["a.root-servers.net", "b.root-servers.net", "c.root-servers.net"]
+
+[performance]
+# Connection pooling
+pool_size = 128
+# Query timeout
+query_timeout_ms = 5000
+# Retry count
+retries = 3
+
+[logging]
+level = "info"
+# Detailed logs for analysis
+detailed = true
+
+[poolside]
+# Integration with poolside models
+mode = "resolve"
+model = "poolside/laguna-xs-2.1:free"
+
+[domains]
+# Cloudflare managed domains
+cloudflare_domains = ["sitet.top", "cafenetmordad.ir", "mordaddns.ir"]
+# Internal domains
+internal_domains = []
+
+[web3]
+# Web3/Blockchain support
+ethereum_rpc = true
+polygon_rpc = true
+solana_rpc = true
+
+[gaming]
+# Gaming service discovery
+xbox_live = true
+playstation_network = true
+steam = true

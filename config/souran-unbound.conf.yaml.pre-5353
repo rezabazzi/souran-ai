@@ -1,0 +1,110 @@
+# =====================================================================
+# SOURAN AI NETWORK SERVER v4.0.0 — ENGINE 1: UNBOUND CORE
+# Built from source: github.com/NLnetLabs/unbound (release-1.24.2)
+# Role: TRUE zero-upstream iterative recursive resolver (root-anchored).
+#      Owns port 53 (UDP+TCP).
+# Cache/serve-expired/dnstap behaviours mirror Technitium so the
+# v13 API layer on :53443 can drive it 1:1.
+# =====================================================================
+
+server:
+    verbosity: 1
+    interface: 0.0.0.0
+    interface: ::0
+    port: 53
+    do-daemonize: no
+    do-ip4: yes
+    do-ip6: yes
+    prefer-ip6: no
+    do-udp: yes
+    do-tcp: yes
+    use-syslog: no
+    logfile: "/opt/souran-ai/logs/unbound.log"
+    log-time-ascii: yes
+    log-queries: no
+    log-replies: no
+    pidfile: "/run/souran-unbound.pid"
+    username: "unbound"
+    chroot: ""
+    directory: "/opt/souran-ai/engine/unbound"
+    root-hints: "/opt/souran-ai/engine/root.hints"
+    auto-trust-anchor-file: "/opt/souran-ai/engine/unbound-root.key"
+    do-not-query-localhost: no
+
+    # ZERO-BLOCK policy: never refuse any query
+    deny-any: no
+
+    prefetch: yes
+    prefetch-key: yes
+    rrset-roundrobin: yes
+    minimal-responses: no
+    num-threads: 4
+
+    # Technitium-equivalent smart cache
+    msg-cache-size: 256m
+    rrset-cache-size: 512m
+    key-cache-size: 64m
+    neg-cache-size: 64m
+    infra-cache-numhosts: 100000
+    cache-max-ttl: 86400
+    cache-min-ttl: 0
+    cache-max-negative-ttl: 1800
+    serve-expired: yes
+    serve-expired-ttl: 86400
+    serve-expired-reply-ttl: 300
+    serve-expired-ttl-reset: yes
+    jostle-timeout: 200
+    infra-host-ttl: 900
+    rrset-cache-slabs: 4
+    so-reuseport: yes
+    unwanted-reply-threshold: 10000000
+
+    # ---- poison / injection resistance --------------------------------
+    # Force TCP for ALL upstream (authoritative) queries. Plain UDP/53
+    # responses are trivially forged on this network: telegram.org was
+    # observed resolving to 10.10.34.36 (a private, unroutable address)
+    # instead of its real 149.154.167.99. TCP is not spoofable in
+    # flight, so every answer now comes from the real authority.
+    # Cost: more packets/slightly higher latency on a lossy link; this
+    # is the correct trade for poison-proof resolution.
+    tcp-upstream: yes
+
+    harden-dnssec-stripped: yes
+    harden-below-nxdomain: yes
+    harden-glue: yes
+    harden-large-queries: yes
+    harden-short-bufsize: yes
+    harden-unverified-glue: yes
+    harden-referral-path: yes
+    harden-algo-downgrade: yes
+    harden-unknown-additional: yes
+    use-caps-for-id: no
+    qname-minimisation: yes
+    qname-minimisation-strict: no
+    aggressive-nsec: yes
+    disable-dnssec-lame-check: no
+    # Permissive: this network path strips/intercepts RRSIGs (no DNSSEC
+    # records returned for some DS queries), which makes strict
+    # validation SERVFAIL on otherwise-correct answers. We still validate
+    # when signatures are present; we just do not fail the query when the
+    # chain cannot be completed in transit.
+    val-permissive-mode: yes
+    val-clean-additional: yes
+    val-log-level: 2
+    val-max-restart: 5
+    module-config: "validator iterator"
+
+    # ---- wire hygiene / privacy ----------------------------------------
+    edns-buffer-size: 1232
+    max-udp-size: 1232
+    edns-tcp-keepalive: yes
+    unknown-server-time-limit: 500
+
+access-control: 0.0.0.0/0 allow
+access-control: ::/0 allow
+
+remote-control:
+    control-enable: yes
+    control-interface: 127.0.0.1
+    control-port: 8953
+    control-use-cert: no

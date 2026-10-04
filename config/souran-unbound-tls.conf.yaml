@@ -1,0 +1,57 @@
+# =====================================================================
+# SOURAN AI NETWORK SERVER v4.0.0 — ENGINE 1 TINY: UNBOUND DoT :853
+# Same zero-upstream recursive core, exposed as DNS-over-TLS.
+# =====================================================================
+
+server:
+    verbosity: 1
+    interface: 127.0.0.1
+    interface: ::1
+    port: 5354
+    do-daemonize: no
+    do-ip4: yes
+    do-ip6: yes
+    do-udp: yes
+    do-tcp: yes
+    use-syslog: no
+    logfile: "/opt/souran-ai/logs/unbound-dot.log"
+    log-time-ascii: yes
+    pidfile: "/run/souran-unbound-dot.pid"
+    username: "unbound"
+    chroot: ""
+    directory: "/opt/souran-ai/engine/unbound"
+    root-hints: "/opt/souran-ai/engine/root.hints"
+    auto-trust-anchor-file: "/opt/souran-ai/engine/unbound-root.key"
+    do-not-query-localhost: no
+
+    # DoT
+    tls-port: 5354
+    tls-cert-bundle: "/opt/souran-ai/config/doh.pem"
+    tls-service-key: "/opt/souran-ai/config/doh.key"
+    tls-service-pem: "/opt/souran-ai/config/doh.pem"
+    tls-upstream: no
+
+    deny-any: no
+    num-threads: 2
+    msg-cache-size: 64m
+    rrset-cache-size: 128m
+    serve-expired: yes
+    serve-expired-ttl: 86400
+    minimal-responses: no
+    edns-buffer-size: 1232
+    max-udp-size: 1232
+    qname-minimisation: yes
+    module-config: "validator iterator"
+    harden-dnssec-stripped: yes
+    harden-glue: yes
+    harden-below-nxdomain: yes
+    harden-large-queries: yes
+    harden-short-bufsize: yes
+    aggressive-nsec: yes
+    val-permissive-mode: no
+
+access-control: 0.0.0.0/0 allow
+access-control: ::/0 allow
+
+remote-control:
+    control-enable: no

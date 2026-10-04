@@ -11,3 +11,28 @@ __pycache__/
 config/*.key
 config/*.pem
 engine/unbound-src/
+
+# Python virtualenv — 859 files were tracked here, which is ~78% of the
+# repository and pure noise. It is regenerable with `python3 -m venv`.
+.venv/
+venv/
+# Bytecode — regenerated on import, never source.
+*.pyc
+*.pyo
+__pycache__/
+# Vendored upstream trees: compiled from during the .deb build, never
+# shipped in the payload.
+engine/unbound-src/
+censorship/zapret/
+censorship/goodbyedpi/
+censorship/byedpi/
+# Prebuilt third-party binaries (Technitium .NET runtime).
+dns/
+# Runtime state — never source.
+*.log
+logs/
+run/
+toggles.conf
+feature-state.json
+client-ca/
+__pycache__/

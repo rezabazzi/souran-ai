@@ -1,0 +1,267 @@
+#!/bin/bash
+# Souran DNS Toggle Control System v3.0.0
+# Controls: tor-binding, censorship-bypass, dnssec, cache, blocklists
+# Usage: souran-toggle <feature> <on|off|status>
+# Examples:
+#   souran-toggle tor-binding on     # Enable Tor DNS forwarding
+#   souran-toggle tor-binding off    # Disable Tor, use direct DNS
+#   souran-toggle censorship-bypass on   # Enable censorship bypass
+#   souran-toggle censorship-bypass off  # Disable censorship bypass
+#   souran-toggle status         # Show all toggle statuses
+
+SOURAN_DIR="/opt/souran-ai"
+TOGGLE_FILE="$SOURAN_DIR/toggles.conf"
+DNS_CONFIG="/opt/souran-ai/dns/dns.config"
+FORWARDING_APP="/opt/souran-ai/dns/apps/SouranSmartForwardingApp/config.json"
+
+# Initialize toggles file if missing
+if [ ! -f "$TOGGLE_FILE" ]; then
+    cat > "$TOGGLE_FILE" << 'INIT'
+tor_binding=on
+censorship_bypass=on
+dnssec=off
+cache=on
+blocklists=off
+INIT
+fi
+
+get_toggle() {
+    grep "^$1=" "$TOGGLE_FILE" 2>/dev/null | cut -d= -f2
+}
+
+set_toggle() {
+    local feature="$1"
+    local value="$2"
+    if grep -q "^${feature}=" "$TOGGLE_FILE" 2>/dev/null; then
+        sed -i "s/^${feature}=.*/${feature}=${value}/" "$TOGGLE_FILE"
+    else
+        echo "${feature}=${value}" >> "$TOGGLE_FILE"
+    fi
+}
+
+apply_tor_toggle() {
+    local state="$1"
+    if [ "$state" = "on" ]; then
+        # Enable Tor DNS forwarding in SouranSmartForwardingApp
+        cat > "$FORWARDING_APP" << 'EOF'
+{
+    "appPreference": 210,
+    "healthCheckIntervalSeconds": 15,
+    "healthCheckTimeoutMs": 3000,
+    "unhealthyThreshold": 3,
+    "healthCheckDomain": "cloudflare.com",
+    "routes": [
+        {
+            "name": "tor-dns",
+            "forwarder": "127.0.0.1:9053",
+            "protocol": "Udp",
+            "priority": 10
+        },
+        {
+            "name": "quad9-dot-fragmented",
+            "forwarder": "tls://9.9.9.9",
+            "protocol": "Tls",
+            "priority": 50,
+            "tlsFragmentation": {
+                "enabled": true,
+                "mode": "tcpSegment",
+                "fragmentBytes": 1,
+                "splitAtSni": true
+            }
+        },
+        {
+            "name": "cloudflare-dot-fragmented",
+            "forwarder": "tls://1.1.1.1",
+            "protocol": "Tls",
+            "priority": 60,
+            "tlsFragmentation": {
+                "enabled": true,
+                "mode": "tcpSegment",
+                "fragmentBytes": 1,
+                "splitAtSni": true
+            }
+        }
+    ]
+}
+EOF
+        echo "[TOR] Binding enabled - DNS routes through Tor"
+    else
+        # Disable Tor - direct DNS only
+        cat > "$FORWARDING_APP" << 'EOF'
+{
+    "appPreference": 210,
+    "healthCheckIntervalSeconds": 15,
+    "healthCheckTimeoutMs": 3000,
+    "unhealthyThreshold": 3,
+    "healthCheckDomain": "cloudflare.com",
+    "routes": [
+        {
+            "name": "quad9-dot-fragmented",
+            "forwarder": "tls://9.9.9.9",
+            "protocol": "Tls",
+            "priority": 10,
+            "tlsFragmentation": {
+                "enabled": true,
+                "mode": "tcpSegment",
+                "fragmentBytes": 1,
+                "splitAtSni": true
+            }
+        },
+        {
+            "name": "cloudflare-dot-fragmented",
+            "forwarder": "tls://1.1.1.1",
+            "protocol": "Tls",
+            "priority": 20,
+            "tlsFragmentation": {
+                "enabled": true,
+                "mode": "tcpSegment",
+                "fragmentBytes": 1,
+                "splitAtSni": true
+            }
+        }
+    ]
+}
+EOF
+        echo "[TOR] Binding disabled - DNS routes direct (no Tor)"
+    fi
+}
+
+apply_censorship_toggle() {
+    local state="$1"
+    if [ "$state" = "on" ]; then
+        # Enable censorship bypass - fragment DNS, use DoT, random padding
+        echo "[CENSORSHIP] Bypass enabled - fragmentation + DoT + DPI evasion"
+        # Apply fragmentation settings
+        python3 -c "
+import json
+with open('$FORWARDING_APP', 'r') as f:
+    cfg = json.load(f)
+for route in cfg.get('routes', []):
+    if 'tlsFragmentation' in route:
+        route['tlsFragmentation']['enabled'] = True
+        route['tlsFragmentation']['mode'] = 'tcpSegment'
+        route['tlsFragmentation']['fragmentBytes'] = 1
+        route['tlsFragmentation']['splitAtSni'] = True
+with open('$FORWARDING_APP', 'w') as f:
+    json.dump(cfg, f, indent=2)
+"
+    else
+        # Disable censorship bypass - clean DNS
+        echo "[CENSORSHIP] Bypass disabled - clean DNS, no fragmentation"
+        python3 -c "
+import json
+with open('$FORWARDING_APP', 'r') as f:
+    cfg = json.load(f)
+for route in cfg.get('routes', []):
+    if 'tlsFragmentation' in route:
+        route['tlsFragmentation']['enabled'] = False
+        route['tlsFragmentation']['fragmentBytes'] = 0
+with open('$FORWARDING_APP', 'w') as f:
+    json.dump(cfg, f, indent=2)
+"
+    fi
+}
+
+restart_dns() {
+    echo "[DNS] Restarting Technitium..."
+    sudo -S -p '' <<< "" pkill -f DnsServerApp 2>/dev/null
+    sleep 2
+    cd /opt/souran-ai/dns && sudo -S -p '' <<< "" /usr/bin/dotnet DnsServerApp.dll /opt/souran-ai/dns &
+    sleep 5
+    echo "[DNS] Restarted on port 53"
+}
+
+case "$1" in
+    tor-binding)
+        if [ "$2" = "on" ]; then
+            set_toggle "tor_binding" "on"
+            apply_tor_toggle "on"
+            restart_dns
+        elif [ "$2" = "off" ]; then
+            set_toggle "tor_binding" "off"
+            apply_tor_toggle "off"
+            restart_dns
+        else
+            echo "tor-binding = $(get_toggle tor_binding)"
+        fi
+        ;;
+    censorship-bypass)
+        if [ "$2" = "on" ]; then
+            set_toggle "censorship_bypass" "on"
+            apply_censorship_toggle "on"
+            restart_dns
+        elif [ "$2" = "off" ]; then
+            set_toggle "censorship_bypass" "off"
+            apply_censorship_toggle "off"
+            restart_dns
+        else
+            echo "censorship-bypass = $(get_toggle censorship_bypass)"
+        fi
+        ;;
+    dnssec)
+        if [ "$2" = "on" ]; then
+            set_toggle "dnssec" "on"
+            echo "[DNSSEC] Enabled"
+        elif [ "$2" = "off" ]; then
+            set_toggle "dnssec" "off"
+            echo "[DNSSEC] Disabled"
+        else
+            echo "dnssec = $(get_toggle dnssec)"
+        fi
+        ;;
+    cache)
+        if [ "$2" = "on" ]; then
+            set_toggle "cache" "on"
+            echo "[CACHE] Enabled"
+        elif [ "$2" = "off" ]; then
+            set_toggle "cache" "off"
+            echo "[CACHE] Disabled"
+        else
+            echo "cache = $(get_toggle cache)"
+        fi
+        ;;
+    blocklists)
+        if [ "$2" = "on" ]; then
+            set_toggle "blocklists" "on"
+            echo "[BLOCKLISTS] Enabled"
+        elif [ "$2" = "off" ]; then
+            set_toggle "blocklists" "off"
+            echo "[BLOCKLISTS] Disabled"
+        else
+            echo "blocklists = $(get_toggle blocklists)"
+        fi
+        ;;
+    status)
+        echo "=== Souran DNS v3.0.0 Toggle Status ==="
+        echo "tor-binding      = $(get_toggle tor_binding)"
+        echo "censorship-bypass = $(get_toggle censorship_bypass)"
+        echo "dnssec           = $(get_toggle dnssec)"
+        echo "cache            = $(get_toggle cache)"
+        echo "blocklists       = $(get_toggle blocklists)"
+        echo ""
+        echo "=== Active Ports ==="
+        sudo -S -p '' <<< "" ss -tlnp | grep -E ':(53|853|443|53443) ' | awk '{print $4, $7}'
+        echo ""
+        echo "=== DNS Resolution ==="
+        dig @127.0.0.1 google.com A +short +time=3 +tries=1 2>/dev/null && echo "  google.com: OK" || echo "  google.com: FAIL"
+        dig @127.0.0.1 example.com A +short +time=3 +tries=1 2>/dev/null && echo "  example.com: OK" || echo "  example.com: FAIL"
+        ;;
+    *)
+        echo "Souran DNS Toggle Control v3.0.0"
+        echo "Usage: souran-toggle <feature> <on|off|status>"
+        echo ""
+        echo "Features:"
+        echo "  tor-binding        - Bind DNS through Tor (on/off)"
+        echo "  censorship-bypass  - Enable DPI evasion + fragmentation (on/off)"
+        echo "  dnssec             - DNSSEC validation (on/off)"
+        echo "  cache              - DNS caching (on/off)"
+        echo "  blocklists         - Blocklist filtering (on/off)"
+        echo ""
+        echo "Commands:"
+        echo "  souran-toggle status          - Show all statuses"
+        echo "  souran-toggle tor-binding on  - Enable Tor binding"
+        echo "  souran-toggle tor-binding off - Disable Tor binding"
+        echo "  souran-toggle censorship-bypass on  - Enable censorship bypass"
+        echo "  souran-toggle censorship-bypass off - Disable censorship bypass"
+        ;;
+esac

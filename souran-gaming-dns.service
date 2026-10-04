@@ -1,0 +1,21 @@
+[Unit]
+Description=Souran AI Network Server — Gaming DNS (Port 8087)
+After=souran-doh-fallback.service souran-dns.service network-online.target
+Wants=network-online.target souran-doh-fallback.service
+
+[Service]
+Type=simple
+User=reza
+WorkingDirectory=/opt/souran-ai
+ExecStart=/usr/bin/python3 /opt/souran-ai/souran_gaming_dns.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+LimitNOFILE=65536
+MemoryMax=256M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=souran-gaming
+
+[Install]
+WantedBy=multi-user.target

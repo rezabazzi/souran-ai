@@ -1,0 +1,21 @@
+[Unit]
+Description=Souran AI Network Server — Anti-Compression Engine (Port 8085)
+After=souran-doh-fallback.service souran-dns.service network-online.target
+Wants=network-online.target souran-doh-fallback.service
+
+[Service]
+Type=simple
+User=reza
+WorkingDirectory=/opt/souran-ai
+ExecStart=/usr/bin/python3 /opt/souran-ai/souran_anticompress_engine.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+LimitNOFILE=65536
+MemoryMax=512M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=souran-anticompress
+
+[Install]
+WantedBy=multi-user.target

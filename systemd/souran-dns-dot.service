@@ -1,0 +1,21 @@
+[Unit]
+Description=Souran DNS over TLS — Unbound DoT :853
+After=souran-dns.service
+Requires=souran-dns.service
+
+[Service]
+Type=simple
+ExecStartPre=/opt/souran-ai/engine/unbound/sbin/unbound-checkconf /opt/souran-ai/config/souran-unbound-tls.conf.yaml
+ExecStart=/opt/souran-ai/engine/unbound/sbin/unbound -c /opt/souran-ai/config/souran-unbound-tls.conf.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=0
+LimitNOFILE=1048576
+MemoryMax=512M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=souran-dns-dot
+
+[Install]
+WantedBy=multi-user.target

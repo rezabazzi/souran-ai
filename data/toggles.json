@@ -1,0 +1,14 @@
+{
+  "dns": true,
+  "dot": true,
+  "doh": true,
+  "tor": true,
+  "web3": true,
+  "gaming": true,
+  "censorship": true,
+  "learning": true,
+  "anticompress": true,
+  "dashboard": true,
+  "neuro": true,
+  "watchdog": true
+}

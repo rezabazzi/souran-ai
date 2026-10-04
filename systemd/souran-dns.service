@@ -1,0 +1,23 @@
+[Unit]
+Description=Souran DNS Core — Unbound zero-upstream recursive resolver :53
+Documentation=file:///opt/souran-ai/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/opt/souran-ai/engine/unbound/sbin/unbound-checkconf /opt/souran-ai/config/souran-unbound.conf.yaml
+ExecStart=/opt/souran-ai/engine/unbound/sbin/unbound -c /opt/souran-ai/config/souran-unbound.conf.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=0
+KillSignal=SIGTERM
+LimitNOFILE=1048576
+MemoryMax=2G
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=souran-dns
+
+[Install]
+WantedBy=multi-user.target

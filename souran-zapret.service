@@ -1,0 +1,18 @@
+[Unit]
+Description=Souran AI Network Server — Zapret DPI Bypass
+After=network-online.target souran-doh-fallback.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/souran-ai/censorship/config/zapret-launcher.sh
+Restart=always
+RestartSec=10
+MemoryMax=128M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=souran-zapret
+
+[Install]
+WantedBy=multi-user.target

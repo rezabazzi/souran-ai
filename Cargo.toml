@@ -1,0 +1,22 @@
+[package]
+name = "souran-dns"
+version = "0.1.0"
+edition = "2021"
+authors = ["Reza Bazzi <reza.bazzii@gmail.com>"]
+description = "Zero-Upstream DNS Resolver built from source for Souran AI Network"
+license = "MIT"
+
+[[bin]]
+name = "soran"
+path = "src/main.rs"
+
+[dependencies]
+rand = "0.8"
+lazy_static = "1.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
