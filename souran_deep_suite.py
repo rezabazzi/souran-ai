@@ -319,18 +319,45 @@ def aaaa_ips(msg):
 
 
 def truth(domain: str, qtype: str = "A"):
-    # Do NOT pass --noproxy here: direct DoH is reset on this network
-    # (curl rc=35). It only succeeds through the local bypass proxy, so the
-    # ground-truth probe must inherit the system proxy configuration.
-    rc, out, _ = _run(["curl", "-s", "--max-time", "15",
-                       "-H", "accept: application/dns-json",
-                       f"https://cloudflare-dns.com/dns-query?"
-                       f"name={domain}&type={qtype}"], timeout=25)
-    try:
-        doc = json.loads(out)
-    except Exception:
-        return []
-    return [a.get("data") for a in doc.get("Answer", []) if a.get("data")]
+    # v4.3.6: direct DoH on this link is DPI-affected. Measured inside a real
+    # suite run: three consecutive probes all returned curl rc=35 (SSL connect
+    # error) with zero bytes, which the old code silently turned into [] — and
+    # an empty truth downgraded "MX records returned" to "MX: no error".
+    # Note the failing case is specifically DNS records, not A: a plain
+    # example.com A probe succeeds. So this is the TLS filter rejecting the
+    # burst the suite itself just generated, not a general outage.
+    #
+    # The fix is to pass the bypass proxy EXPLICITLY rather than relying on
+    # ambient HTTPS_PROXY, which is not always inherited (a systemd-launched
+    # process, or a sanitised environment, loses it and the probe then goes out
+    # direct and gets reset). --proxy is authoritative in curl, so this is
+    # deterministic regardless of environment.
+    proxy = os.environ.get("SOURAN_PROXY") or os.environ.get("HTTPS_PROXY") \
+        or os.environ.get("https_proxy") or "http://127.0.0.1:8118"
+    for attempt in range(3):
+        rc, out, err = _run(["curl", "-s", "--max-time", "15",
+                             "--proxy", proxy,
+                             "-H", "accept: application/dns-json",
+                             f"https://cloudflare-dns.com/dns-query?"
+                             f"name={domain}&type={qtype}"], timeout=25)
+        try:
+            doc = json.loads(out)
+        except Exception:
+            doc = None
+        if isinstance(doc, dict):
+            answers = [a.get("data") for a in doc.get("Answer", []) if a.get("data")]
+            # An empty Answer with Status 0 is genuine NODATA and is a valid
+            # truth. Only a failed probe is retried.
+            if doc.get("Status") == 0:
+                return answers
+            print(f"       [debug] truth({domain},{qtype}) upstream Status="
+                  f"{doc.get('Status')} (non-zero)")
+        else:
+            print(f"       [debug] truth({domain},{qtype}) attempt {attempt+1} "
+                  f"failed rc={rc} via {proxy}: {err.strip()[:100]!r}")
+        if attempt < 2:
+            time.sleep(1.5 + attempt)
+    return []
 
 
 
