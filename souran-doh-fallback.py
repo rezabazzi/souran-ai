@@ -53,7 +53,8 @@ try:
     from souran_dns_rr import (  # noqa: E402
         ADDRESS_TYPES,
         answer_addresses,
-        build_nodata,
+        build_error,
+    build_nodata,
         build_passthrough,
         has_answer_of_type,
         iter_answers,
@@ -836,8 +837,46 @@ def _resolve_uncached(qname: str, qtype: int):
     return payload if payload else None, False
 
 
+def _name_is_legal(qname: str) -> bool:
+    """Is this a syntactically valid DNS name?
+
+    RFC 1035 section 2.3.4 caps a label at 63 octets and the whole name at
+    255. An over-long label can never be a legal name, so the only correct
+    answer is FORMERR.
+
+    Measured before this check existed: a 300-byte label produced NO
+    REPLY AT ALL -- not a slow answer, an absent one. The resolver was
+    asked anyway, tier-1 returned FORMERR, the front-end treats a
+    non-authoritative rcode as "escalate to DoH", DoH cannot answer it
+    either, and the client hung until it timed out. A malformed query must
+    be rejected promptly, not escalated.
+    """
+    if not qname:
+        return False
+    total = 1  # root label
+    for label in qname.split("."):
+        if not label:
+            continue
+        try:
+            n = len(label.encode("idna")) if any(ord(c) > 127 for c in label) \
+                else len(label.encode("ascii"))
+        except (UnicodeError, ValueError):
+            return False
+        if n == 0 or n > 63:
+            return False
+        total += n + 1
+    return total <= 255
+
+
 def resolve(qname: str, qtype: int = 1):
     """Return (response_bytes, used_fallback)."""
+    # Syntactically impossible names get an immediate FORMERR. Escalating
+    # them wastes a DoH round-trip and, because no upstream can answer,
+    # leaves the client with no reply at all.
+    if not _name_is_legal(qname):
+        STATS["formerr"] = STATS.get("formerr", 0) + 1
+        return build_error(qname, qtype, 1), False
+
     key = (qname.lower(), qtype)
 
     cached = _cache_get(key)
@@ -1049,16 +1088,34 @@ class UDPHandler(socketserver.BaseRequestHandler):
         off = 12
         qname = None
         qtype = 1
+        malformed = False
         for _ in range(qd):
             name, off = _decode_name(data, off)
             if name is None:
-                return
+                malformed = True
+                break
             qname = name.rstrip(".")
             if off + 4 > len(data):
-                return
+                malformed = True
+                break
             qtype, _qc = struct.unpack("!HH", data[off:off + 4])
             off += 4
-        if not qname:
+        # A question section we cannot parse must get FORMERR, never
+        # silence. Measured: a 64-byte label produced NO REPLY AT ALL and
+        # the client hung for its whole timeout, because each bail-out
+        # below simply returned. A resolver that does not answer a
+        # malformed query looks identical to one that is down.
+        if malformed or not qname:
+            STATS["formerr"] = STATS.get("formerr", 0) + 1
+            resp = struct.pack("!HHHHHH", _qid, 0x8181, 0, 0, 0, 0)
+            if qd_end > 12:
+                # Echo the question verbatim when we managed to find its
+                # end, so the client can match the response to its query.
+                resp += data[12:qd_end]
+            try:
+                sock.sendto(resp, self.client_address)
+            except OSError:
+                pass
             return
         answer, _fb = resolve(qname, qtype)
         if answer is None or len(answer) < 12:

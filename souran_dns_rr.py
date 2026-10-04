@@ -223,6 +223,36 @@ def build_passthrough(qname: str, qtype: int, rrs, ttl: int = 300) -> bytes:
     return header + qname_enc + struct.pack("!HH", qtype, 1) + answers
 
 
+def build_error(qname: str, qtype: int, rcode: int = 1) -> bytes:
+    """A FORMERR (or other error) reply.
+
+    Used for a syntactically invalid query, which must be refused
+    promptly rather than passed upstream: no authority can answer it, so
+    escalating it produces no reply at all and the client hangs.
+    """
+    # _encode_name() RAISES on an over-long label -- which is precisely
+    # the input this function exists to reject. Encoding the offending
+    # name here turned a FORMERR into an unhandled ValueError in the
+    # request thread, so the client got no reply at all: measured, a
+    # 64-byte label hung for the full 12 s timeout.
+    #
+    # The question section is echoed verbatim from the caller's bytes
+    # where possible. When the name cannot be encoded, emit a bare
+    # header with QDCOUNT=0: a FORMERR that names nothing is still a
+    # prompt, unambiguous answer, and never an exception.
+    try:
+        qname_enc = _encode_name(qname) if qname else b"\x00"
+        qdcount = 1
+    except (ValueError, UnicodeError):
+        qname_enc = b""
+        qdcount = 0
+    flags = 0x8180 | (rcode & 0x0F)
+    header = struct.pack("!HHHHHH", 0, flags, qdcount, 0, 0, 0)
+    if not qname_enc:
+        return header
+    return header + qname_enc + struct.pack("!HH", qtype, 1)
+
+
 def build_nodata(qname: str, qtype: int, nxdomain: bool = False) -> bytes:
     """A correct negative response.
 
