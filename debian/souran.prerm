@@ -2,7 +2,39 @@
 # Souran v5.0.0 — prerm
 set -e
 
+# Record which units are RUNNING so the upgrade can bring them back.
+#
+# Measured on a real upgrade of a live deployment: dpkg stopped all 16
+# Souran units, restarted NONE of them, and left the machine with no
+# resolver at all. The dashboards, the control API and the watchdog were
+# all down until they were started by hand. dh_installsystemd does this
+# because the units are enabled; it does not know the operator may have
+# started them by hand, and it has no way to restore that.
+#
+# So the state is captured here and replayed in the postinst. An upgrade
+# must be invisible to a running resolver.
+SOURAN_UNITS="souran-dns souran-doh-fallback souran-8083-doh souran-dns-dot
+souran-sidecar souran-8082-dashboard souran-web-8383 souran-watchdog
+souran-anticompress souran-learning-engine souran-ids souran-feature-executor
+souran-web3-resolver souran-gaming-dns souran-firewall"
+
+record_running_state() {
+    running=""
+    for u in $SOURAN_UNITS; do
+        if systemctl is-active --quiet "$u.service" 2>/dev/null; then
+            running="$running $u"
+        fi
+    done
+    if [ -n "$running" ]; then
+        # shellcheck disable=SC2086
+        printf '%s\n' "$running" > /run/souran-was-running
+    fi
+}
+
 case "$1" in
+    upgrade|failed-upgrade|abort-install)
+        record_running_state
+        ;;
     remove|deconfigure)
         # Stop our units explicitly. The package never enabled them, but an
         # operator may have, and an upgrade must not leave a resolver

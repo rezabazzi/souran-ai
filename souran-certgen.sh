@@ -156,10 +156,33 @@ EOF
         cp -f "$LEAF_PEM" "$DIR/souran.pem"
     fi
 
-    # The private key must never be group/world readable; unbound drops
-    # privileges to the `unbound` user and still has to read it.
-    chown root:unbound "$LEAF_KEY" 2>/dev/null || chown root:root "$LEAF_KEY"
-    chmod 640 "$LEAF_KEY"
+    # TWO consumers need this key under two different accounts:
+    #   unbound (uid 993)  -> its own DoT listener on :5354
+    #   reza   (uid 1000) -> the poison-proof front-end's DoT listener on :853
+    # So it is root:souran-tls 0640 with BOTH accounts in that group.
+    #
+    # It was root:unbound, which silently broke the front-end: the postinst
+    # reported certgen as failing and reza could not read the key, so the
+    # :853 listener died with "Permission denied" while the certificate
+    # itself was perfectly valid. A dedicated group is the fix; adding reza
+    # to the `unbound` group would grant far more than key access.
+    if getent group souran-tls >/dev/null 2>&1; then
+        TLS_GID="souran-tls"
+    else
+        groupadd -r souran-tls 2>/dev/null || true
+        getent group souran-tls >/dev/null 2>&1 && TLS_GID="souran-tls"
+    fi
+    if [ -n "${TLS_GID:-}" ]; then
+        chown "root:$TLS_GID" "$LEAF_KEY" 2>/dev/null || true
+        for u in reza unbound; do
+            id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx "$TLS_GID" || \
+                usermod -aG "$TLS_GID" "$u" 2>/dev/null || true
+        done
+    else
+        chown root:root "$LEAF_KEY" 2>/dev/null || true
+        echo "WARNING: could not create group souran-tls; key is root-only" >&2
+    fi
+    chmod 0640 "$LEAF_KEY"
     chmod 644 "$LEAF_PEM"
 
     # Chain file: clients that pin an intermediate need leaf+CA.

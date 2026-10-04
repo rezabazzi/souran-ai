@@ -85,8 +85,50 @@ case "$1" in
         #
         #   /opt/souran-ai/souran-enable-all
         #
-        echo "souran: installed but NOT started (port 53 must not be claimed"
-        echo "souran: implicitly). Run /opt/souran-ai/souran-enable-all to activate."
+                # Restore ownership of the code tree.
+        #
+        # dpkg unpacks everything as root:root, which leaves every file in
+        # /opt/souran-ai root-owned and blocks ALL further edits -- the
+        # development tree is the deployed tree here. This has now cost
+        # two debugging sessions, so it is fixed in the package rather
+        # than worked around by hand each time.
+        #
+        # Only the code and docs, never config/ or logs/: those are
+        # deliberately root-owned because they hold key material.
+        if id -u SOURAN_USER >/dev/null 2>&1; then
+            chown -R "SOURAN_USER:SOURAN_USER" /opt/souran-ai 2>/dev/null || true
+            # Key material must stay root-owned even after the tree
+            # above is handed to the service account.
+            chown root:souran-tls /opt/souran-ai/config/doh.key    2>/dev/null || true
+            chown root:root     /opt/souran-ai/config/souran-ca.key 2>/dev/null || true
+            chmod 0640 /opt/souran-ai/config/doh.key    2>/dev/null || true
+            chmod 0600 /opt/souran-ai/config/souran-ca.key 2>/dev/null || true
+            chown -R root:root /opt/souran-ai/logs 2>/dev/null || true
+        fi
+
+        # An UPGRADE must restore whatever was running before. A fresh
+        # install must NOT claim :53, so it stays stopped and says so.
+        #
+        # Measured on a real upgrade: dpkg stopped all 16 Souran units,
+        # restarted none of them, and left a live deployment with no
+        # resolver, no dashboards and no watchdog until they were started
+        # by hand. dh_installsystemd stops the units because they are
+        # enabled; it cannot know the operator started them by hand and
+        # has no way to put them back. The prerm hook captured the state
+        # in /run/souran-was-running, so an upgrade is invisible.
+        if [ -f /run/souran-was-running ]; then
+            restoring="$(cat /run/souran-was-running)"
+            rm -f /run/souran-was-running
+            for u in $restoring; do
+                systemctl start "$u.service" >/dev/null 2>&1 || \
+                    echo "souran: WARNING - could not restart $u"
+            done
+            echo "souran: upgrade complete; restored previously running units:"
+            for u in $restoring; do echo "souran:   $u"; done
+        else
+            echo "souran: installed but NOT started (port 53 must not be claimed"
+            echo "souran: implicitly). Run /opt/souran-ai/souran-enable-all to activate."
+        fi
 
         # Non-interactive installs must not leave dpkg waiting on a prompt
         # when a service cannot start; everything is disabled above, so
