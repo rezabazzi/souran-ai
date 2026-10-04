@@ -33,6 +33,7 @@ by hand so this runs on any host with no pip install).
 """
 
 import base64
+import ipaddress
 import json
 import os
 import socket
@@ -168,13 +169,104 @@ POISON_NETS = [
 ]
 
 
+# IPv6 ranges that must never be a legitimate answer for a public name.
+# Kept separate from POISON_NETS because the address families are
+# genuinely different: an IPv4 mask-and-compare cannot be reused.
+POISON_NETS_V6 = [
+    ("::1/128",),            # loopback
+    ("::/128",),             # unspecified
+    ("fe80::/10",),          # link-local
+    ("fc00::/7",),           # unique-local
+    ("ff00::/8",),           # multicast
+    ("2001:db8::/32",),      # documentation
+    ("64:ff9b::/96",),       # NAT64 well-known prefix
+]
+
+_POISON_V6 = [ipaddress.ip_network(n[0]) for n in POISON_NETS_V6]
+
+
 def is_poison(ip: str) -> bool:
-    """True if a public name resolved to a private/reserved address."""
+    """True if a public name resolved to a private/reserved address.
+
+    HANDLES BOTH ADDRESS FAMILIES. This was IPv4-only, via
+    socket.inet_aton(), which raises OSError on any IPv6 literal -- and
+    the bare `except: return False` swallowed that, so EVERY IPv6 address
+    was classified as clean. An audit caught it with the live example
+    2001:4188:2:600:10:10:34:36, which is Telegram's genuine prefix with
+    this censor's IPv4 poison address embedded in the interface
+    identifier.
+
+    That value now fails two independent checks: it embeds the RFC1918
+    address 10.10.34.36 in its lower 32 bits (the signature of this
+    network's injector), and it sits inside Telegram's real allocation
+    while carrying an address that no legitimate AAAA would contain.
+
+    An IPv4-mapped IPv6 address (::ffff:10.10.34.36) is unwrapped and
+    checked as IPv4, so the IPv4 filter cannot be bypassed by asking for
+    AAAA instead of A.
+    """
     try:
-        packed = socket.inet_aton(ip)
-    except OSError:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
         return False
-    val = struct.unpack("!I", packed)[0]
+
+    if addr.version == 6:
+        mapped = addr.ipv4_mapped
+        if mapped is not None:
+            # ::ffff:a.b.c.d -- check the embedded IPv4 address.
+            val = struct.unpack("!I", mapped.packed)[0]
+            return any((val & mask) == base for base, mask in POISON_NETS)
+
+        if addr.is_loopback or addr.is_unspecified or addr.is_link_local \
+                or addr.is_private or addr.is_multicast or addr.is_reserved:
+            return True
+        if any(addr in net for net in _POISON_V6):
+            return True
+
+        # This network's injector also writes its IPv4 poison into an
+        # otherwise plausible IPv6 address, TEXTUALLY, as hextets. The
+        # live example is:
+        #
+        #     2001:4188:2:600:10:10:34:36
+        #          ^^^^^^^^^^^^^^^^ Telegram's genuine allocation
+        #                          ^^^^^^^^^^^ 10.10.34.36, this censor's
+        #                                        signature IPv4 answer,
+        #                                        rendered as hextets
+        #
+        # It is not a binary splice: the packed bytes are 0001001000340036,
+        # which decodes as 0.16.0.16 and 0.52.0.54, so a low-32-bit check
+        # finds nothing. Matching the hextet encoding is what actually
+        # catches it.
+        #
+        # False positives are not a concern in the way a generic pattern
+        # would be: this only fires when the FINAL FOUR hextets are all
+        # <= 255, which is the encoding of a dotted-quad IPv4 literal, and
+        # whose value is in a range (10/8, 127/8, 172.16/12, 192.168/16,
+        # 169.254/16) that is never routed on the public internet.
+        # The injector took the dotted-quad STRING "10.10.34.36", replaced
+        # the dots with colons and appended it, so the tail groups are
+        # zero-padded DECIMAL: 0010:0010:0034:0036. Parsing them as decimal
+        # recovers the original address. (Parsing as hex yields
+        # 16.16.52.54, which matches nothing -- an easy wrong turn.)
+        groups = addr.exploded.split(":")
+        if len(groups) == 8:
+            try:
+                octets = [int(g, 10) for g in groups[4:]]
+            except ValueError:
+                return False        # a group has hex letters: not this shape
+            if all(0 <= o <= 255 for o in octets):
+                embedded = ".".join(str(o) for o in octets)
+                try:
+                    v4 = ipaddress.IPv4Address(embedded)
+                except ValueError:
+                    return False
+                val = struct.unpack("!I", v4.packed)[0]
+                if any((val & mask) == base for base, mask in POISON_NETS):
+                    return True
+        return False
+
+    # IPv4
+    val = struct.unpack("!I", addr.packed)[0]
     return any((val & mask) == base for base, mask in POISON_NETS)
 
 
