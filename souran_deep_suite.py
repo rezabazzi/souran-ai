@@ -461,8 +461,17 @@ def t2_record_types():
         check("MX records returned (authoritative has them)", bool(mx),
               f"{len(mx)} MX RR(s) of {len(t_mx)} expected")
     else:
-        check("MX query answered without error", m is not None and
-              parse_header(m)["rcode"] == 0, "authoritative has no MX here")
+        # v4.3.5: truth() reached upstream and reported NO MX for gmail.com, so
+        # the old branch asserted only "no error" and PASSED on a NODATA answer —
+        # a weaker claim than the check name implied, and it did so silently.
+        # Say plainly which case this is instead of blurring it.
+        h_mx = parse_header(m) if m else None
+        nodata_ok = h_mx is not None and h_mx["rcode"] == 0
+        check("MX: upstream reports none (NODATA answered cleanly)",
+              nodata_ok,
+              "" if nodata_ok else
+              "upstream truth unavailable — cannot assert MX content; "
+              "verify MX on a name whose authority is reachable")
     # TXT is tested against gmail.com. google.com was tried first and
     # returned an empty TXT set consistently on BOTH tiers, while the
     # authoritative resolver listed 17 records -- an upstream/authority
@@ -477,9 +486,17 @@ def t2_record_types():
         if any(rt == 16 for _, rt, _ in txt):
             break
         time.sleep(1.0)
-    check("TXT records returned", any(rt == 16 for _, rt, _ in txt),
-          f"{len([r for r in txt if r[1] == 16])} TXT RR(s), "
-          f"authoritative has {len(t_txt)}")
+    # v4.3.5: the detail used to read "4 TXT RR(s), authoritative has 0", which
+    # looks like a resolver discrepancy. It was not: truth() simply failed to
+    # reach upstream that run. Independently confirmed via Cloudflare DoH that
+    # gmail.com publishes exactly 4 TXT records, which is what we return. When
+    # the upstream truth is unavailable, say that instead of printing a number
+    # that implies a mismatch.
+    got = [r for r in txt if r[1] == 16]
+    check("TXT records returned", bool(got),
+          f"{len(got)} TXT RR(s)" +
+          (f", upstream confirms {len(t_txt)}" if t_txt
+           else " (upstream truth unavailable — not cross-checked)"))
     # SOA for the zone must exist.
     #
     # v4.3.2: this was a single 12 s query. Measured cold-lookup latency on this
@@ -876,6 +893,7 @@ def t9_resilience():
     except Exception:
         unit_state = "unknown"
     check("sidecar unit active", unit_state == "active",
+          "" if unit_state == "active" else
           f"{unit_state} — every dashboard toggle would fail")
 
 
