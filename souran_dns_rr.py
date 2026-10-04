@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""
+Souran AI Network Server — v4.3 general RR-type resolution layer.
+
+WHY THIS MODULE EXISTS
+----------------------
+v4.2.1 resolved only A and AAAA. `parse_a_records()` walked the answer
+section but kept only `rtype == 1` (A) and `build_answer()` could only
+synthesise A/AAAA, so every other record type (MX, TXT, CNAME, SOA, NS,
+SRV, AAAA-in-CNAME-chains, HTTPS/SVCB, ...) either timed out or returned a
+malformed packet. dig even warned:
+
+    ;; communications error to 127.0.0.1#53: timed out
+    ;; Warning: Message parser reports malformed message packet.
+
+That is a real correctness bug, not a cosmetic one: a resolver that drops
+MX breaks mail, and one that mangles TXT breaks SPF/DKIM/DMARC and every
+domain-ownership proof.
+
+THE FIX
+-------
+Do not synthesise answers from a whitelist of types. Preserve the upstream
+RRs verbatim: walk the answer section, copy each RR's rdata, and re-emit a
+response that carries the ORIGINAL RR bytes. Only when we must answer from
+scratch (the Tier-2 DoH path, where we rebuild after rejecting an injected
+answer) do we fall back to the legacy A/AAAA synthesiser.
+
+This keeps a byte-exact RR for every type, so MX preference/ordering, TXT
+string segmentation, and unknown/experimental types (RFC 3597) all survive.
+
+Poison-proofing is unchanged and still applies to address-family records:
+A/AAAA answers landing in reserved space are rejected before they can ever be
+cached or served.
+"""
+
+from __future__ import annotations
+
+import socket
+import struct
+
+__version__ = "4.3.0"
+
+# Record types we understand well enough to synthesise from scratch when
+# rebuilding a response after rejecting an injected answer. Everything else is
+# passed through verbatim (see `extract_rrs` / `build_passthrough`).
+_A = 1
+_NS = 2
+_CNAME = 5
+_SOA = 6
+_PTR = 12
+_MX = 15
+_TXT = 16
+_AAAA = 28
+_SRV = 33
+_OPT = 41
+_DS = 43
+_RRSIG = 46
+_DNSKEY = 48
+_NSEC = 47
+_CAA = 257
+_HTTPS = 65
+_SVCB = 64
+
+# Types that carry an IP literal in rdata and therefore must be poison-checked.
+ADDRESS_TYPES = frozenset({_A, _AAAA})
+
+
+def _decode_name(data: bytes, offset: int):
+    """Decode a (possibly compressed) DNS name. Returns (labels, new_offset)."""
+    labels = []
+    jumped = False
+    end = offset
+    guard = 0
+    while True:
+        guard += 1
+        if guard > 128 or end >= len(data):
+            raise ValueError("name overrun")
+        length = data[end]
+        if length == 0:
+            end += 1
+            break
+        if length & 0xC0 == 0xC0:  # compression pointer
+            if end + 1 >= len(data):
+                raise ValueError("truncated pointer")
+            ptr = ((length & 0x3F) << 8) | data[end + 1]
+            if not jumped:
+                end += 2
+            jumped = True
+            if ptr >= len(data):
+                raise ValueError("bad pointer")
+            end = ptr
+            continue
+        end += 1
+        if end + length > len(data):
+            raise ValueError("truncated label")
+        labels.append(data[end:end + length])
+        end += length
+    return labels, end
+
+
+def _encode_name(name: str) -> bytes:
+    out = b""
+    for label in name.rstrip(".").split("."):
+        if not label:
+            continue
+        raw = label.encode("idna") if any(ord(c) > 127 for c in label) else label.encode("ascii", "ignore")
+        if len(raw) > 63:
+            raise ValueError("label too long")
+        out += bytes([len(raw)]) + raw
+    return out + b"\x00"
+
+
+def iter_answers(payload: bytes):
+    """Yield (rtype, rdata, ttl) for every RR in the ANSWER section.
+
+    Never guesses: a malformed packet raises ValueError so the caller can
+    treat the response as untrustworthy rather than serving invented bytes.
+    """
+    if len(payload) < 12:
+        raise ValueError("short header")
+    _qid, _flags, qd, an, _ns, _ar = struct.unpack("!HHHHHH", payload[:12])
+    off = 12
+    for _ in range(qd):
+        _, off = _decode_name(payload, off)
+        off += 4
+    if off > len(payload):
+        raise ValueError("question overrun")
+    for _ in range(an):
+        _name, off = _decode_name(payload, off)
+        if off + 10 > len(payload):
+            raise ValueError("rr header overrun")
+        rtype, _cls, ttl, rdlen = struct.unpack("!HHIH", payload[off:off + 10])
+        off += 10
+        if off + rdlen > len(payload):
+            raise ValueError("rdata overrun")
+        yield rtype, payload[off:off + rdlen], ttl
+        off += rdlen
+
+
+def answer_addresses(payload: bytes):
+    """Return (addresses, rcode) where addresses are A/AAAA rdata strings.
+
+    Raises ValueError on a malformed packet instead of returning partial or
+    fabricated data.
+    """
+    if len(payload) < 12:
+        raise ValueError("short header")
+    _qid, flags, _qd, _an, _ns, _ar = struct.unpack("!HHHHHH", payload[:12])
+    rcode = flags & 0x0F
+    addresses = []
+    for rtype, rdata, _ttl in iter_answers(payload):
+        if rtype == _A and len(rdata) == 4:
+            addresses.append(socket.inet_ntoa(rdata))
+        elif rtype == _AAAA and len(rdata) == 16:
+            addresses.append(socket.inet_ntop(socket.AF_INET6, rdata))
+    return addresses, rcode
+
+
+def question_type(payload: bytes) -> int:
+    """Return the QTYPE of the first question (defaults to A)."""
+    if len(payload) < 12:
+        return _A
+    _qid, _flags, qd, _an, _ns, _ar = struct.unpack("!HHHHHH", payload[:12])
+    if qd < 1:
+        return _A
+    try:
+        _, off = _decode_name(payload, 12)
+        return struct.unpack("!H", payload[off:off + 2])[0]
+    except (ValueError, struct.error):
+        return _A
+
+
+def has_answer_of_type(payload: bytes, qtype: int) -> bool:
+    """True when the answer section carries at least one RR of `qtype`.
+
+    Used by the test suite and by the cache to decide whether an answer is
+    actually useful for the requested type (an NODATA answer has no RRs of the
+    requested type but is still a valid NOERROR reply).
+    """
+    try:
+        return any(rtype == qtype for rtype, _rd, _ttl in iter_answers(payload))
+    except ValueError:
+        return False
+
+
+def build_passthrough(qname: str, qtype: int, rrs, ttl: int = 300) -> bytes:
+    """Rebuild a NOERROR answer carrying verbatim rdata from `rrs`.
+
+    `rrs` is the iterable produced by `iter_answers`. Because rdata is copied
+    verbatim, MX preference and exchange order, TXT character-string
+    segmentation, and unknown types all survive intact — something the old
+    synthesiser could not do for any type outside A/AAAA.
+    """
+    qname_enc = _encode_name(qname)
+    answers = b""
+    count = 0
+    for rtype, rdata, rr_ttl in rrs:
+        answers += (
+            qname_enc
+            + struct.pack("!HHIH", rtype, 1, int(rr_ttl) or ttl, len(rdata))
+            + rdata
+        )
+        count += 1
+    header = struct.pack("!HHHHHH", 0, 0x8180, 1, count, 0, 0)
+    return header + qname_enc + struct.pack("!HH", qtype, 1) + answers
+
+
+def build_nodata(qname: str, qtype: int) -> bytes:
+    """A correct NODATA (NOERROR, zero answers) response."""
+    qname_enc = _encode_name(qname)
+    header = struct.pack("!HHHHHH", 0, 0x8180, 1, 0, 0, 0)
+    return header + qname_enc + struct.pack("!HH", qtype, 1)
+
+
+if __name__ == "__main__":  # pragma: no cover - manual smoke check
+    import sys
+    if len(sys.argv) > 1:
+        blob = bytes.fromhex(sys.argv[1])
+        print("addresses:", answer_addresses(blob))
+    print(f"souran_dns_rr {__version__} OK")
