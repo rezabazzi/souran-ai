@@ -14,6 +14,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import souran_auth
 
 try:
+    import souran_portmap
+    _PORTMAP_OK = True
+except Exception as _pm_exc:  # pragma: no cover
+    souran_portmap = None
+    _PORTMAP_OK = False
+    print(f"[sidecar] portmap unavailable: {_pm_exc}",
+          file=sys.stderr, flush=True)
+
+try:
     import souran_technitium as technitium_client
     _TECH_OK = True
 except Exception as _tech_exc:  # pragma: no cover
@@ -516,6 +525,30 @@ async def auth_state():
 # service is stopped is a lie, and the dashboard must show the difference
 # rather than hide it behind the flag.
 FEATURE_IDS = sorted(souran_features.FEATURES) if _FEATURES_OK else []
+
+
+@app.get("/api/ports")
+async def ports():
+    """Complete inventory of every listening socket on this host.
+
+    Answers the question "what is every port for?" from live kernel state
+    joined to a registry of what each service actually does, and flags
+    anything it cannot account for. Token-protected like every other
+    control route.
+    """
+    if not _PORTMAP_OK:
+        raise HTTPException(503, "port map unavailable")
+    return souran_portmap.build_report()
+
+
+@app.get("/api/ports/text")
+async def ports_text():
+    """The same inventory, rendered for a terminal."""
+    if not _PORTMAP_OK:
+        raise HTTPException(503, "port map unavailable")
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(souran_portmap.render_text(
+        souran_portmap.build_report()))
 
 
 @app.get("/api/features")
