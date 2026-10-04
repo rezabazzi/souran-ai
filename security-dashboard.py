@@ -40,7 +40,7 @@ def collect_blocked_ips():
                         blocked.append({"ip": ip, "action": line.split()[-1], "rule_num": parts[0] if parts[0].isdigit() else "?"})
     except Exception: pass
     try:
-        r = subprocess.run(['grep','-h','DROP\|REJECT\|BLOCK\|blocked',WATCHDOG_LOG], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(['grep','-E','-h','DROP|REJECT|BLOCK|blocked',WATCHDOG_LOG], capture_output=True, text=True, timeout=5)
         for line in r.stdout.splitlines()[-20:]:
             ips = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', line)
             for ip in ips:
@@ -52,7 +52,7 @@ def collect_blocked_ips():
 def collect_failed_logins():
     failed = []
     try:
-        r = subprocess.run(['grep','-h','Failed password\|Invalid user\|authentication failure\|authentication error',AUTH_LOG], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(['grep','-E','-h','Failed password|Invalid user|authentication failure|authentication error',AUTH_LOG], capture_output=True, text=True, timeout=5)
         for line in r.stdout.splitlines():
             m = re.match(r'(\d{4}-\d{2}-\d{2}T[\d:.+-]+)', line)
             ts = m.group(1) if m else datetime.utcnow().isoformat()
@@ -81,13 +81,13 @@ def collect_active_connections():
 def collect_suspicious_ips():
     suspicious = set()
     try:
-        r = subprocess.run(['grep','-h','ERROR\|ALERT\|WARNING\|FAILED\|unhealthy',AI_WATCHDOG_LOG], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(['grep','-E','-h','ERROR|ALERT|WARNING|FAILED|unhealthy',AI_WATCHDOG_LOG], capture_output=True, text=True, timeout=5)
         for line in r.stdout.splitlines():
             ips = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', line)
             for ip in ips: suspicious.add(ip)
     except Exception: pass
     try:
-        r = subprocess.run(['grep','-h','FAILED\|ERROR\|ALERT\|block\|BLOCK\|suspicious',WATCHDOG_LOG], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(['grep','-E','-h','FAILED|ERROR|ALERT|block|BLOCK|suspicious',WATCHDOG_LOG], capture_output=True, text=True, timeout=5)
         for line in r.stdout.splitlines()[-30:]:
             ips = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', line)
             for ip in ips:

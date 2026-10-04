@@ -5,6 +5,89 @@ All notable changes to the Souran AI Network Server project will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.3.2] - 2026-10-04
+
+Bug-fix sweep driven by the watchdog's own log: it was reporting "7 components
+unhealthy" on every cycle, and most of those were false.
+
+### Security
+- **`/api/exec` on the sidecar was unauthenticated remote code execution.**
+  It accepted an arbitrary shell string from `?cmd=` and ran it with
+  `shell=True`, while the app bound `0.0.0.0:9192` — so anyone reaching the
+  port got command execution as the service user. Replaced with a fixed argv
+  allowlist (`uptime`, `disk`, `memory`, `resolver-health`, `watchdog-health`,
+  `dns-query`), `shell=False`, a strict hostname regex on the one parameterised
+  command, and the app now binds `127.0.0.1`. Verified: `?cmd=id` and
+  `?cmd=;cat /etc/passwd` both return 400, injection in `name=` returns 400.
+
+### Watchdog — false alarms that hid real faults
+- `check_svc()` reported "unhealthy" for units that are simply **not
+  installed** (dnsmasq, dashboard-api, dnstt), tripping the restart-rate
+  breaker ("3 restarts in 60min - hard OPEN") every cycle. Now tri-state:
+  0 active, 1 failed, 2 absent. Absence is decided by whether the unit's
+  `FragmentPath` resolves, because `systemctl is-active` reports plain
+  `inactive` (not `not-found`) for a name with no unit file — and this host has
+  a dangling `dnsmasq.service` symlink that `list-unit-files` still lists.
+- All 19 `check_svc X || { log_warn; return 1; }` call sites **discarded the
+  exit code**, making "absent" indistinguishable from "failed". Added
+  `require_svc()` which propagates 2, and `run_check` records `absent`.
+- `run_check` read `local rc=$?` on the line **after** the `if`, where `$?` is
+  the status of the whole `if` construct (always 0), so the absent signal was
+  lost again. Now captured on the same statement as the call.
+- `check_wireguard_peers` was **called but never defined** — every cycle logged
+  `command not found` and reported WireGuard Peers UNHEALTHY with an auto-fix
+  that could never run. Implemented; zero peers is a valid server-ready state,
+  not a fault.
+- `check_dns_cache` queried the **removed Technitium API on :53443**, so it
+  reported "stats API unreachable" forever. Rewritten against the real cache
+  (unbound control socket + front-end timing), keeping the poison canary.
+  `_unbound_stats()` was referenced but never defined either.
+- `uplink_ok()` probed `TCP/443 -> 1.1.1.1` and `ping 8.8.8.8` — **both are
+  censored here**, so it reported UPLINK DOWN while DNS, privoxy and Tor all
+  worked. Because the result is a shared cache, one bad probe suppressed
+  auto-fix for *every* component ("remediation suppressed"). Now probes the
+  resolver, the bypass proxy, Tor, or plain route presence.
+- DoH was probed at `https://dns.mordad/dns-query` on :443, where **nothing has
+  ever listened**; the real DoH endpoint is :8083. Then probed with the RFC 8484
+  wire-format GET, which :8083 does not implement (422). Now uses the JSON GET
+  it actually serves. DoQ/DoH3 are reported as "not deployed" instead of
+  FAILED, and the public-endpoint probe no longer concatenates `|| echo 000`
+  into the nonsense code `000000`.
+- Cloudflare HTTP 530 is now reported as an **external** fault (the local
+  origin on :8080 answers 200) and excluded from auto-remediation, instead of
+  churning a healthy tunnel every 120 s.
+- `disk_repair()` only cleaned `/var/log` at `-maxdepth 1`, missing nested logs
+  (1.6 GB under `/var/log/technitium/dns/`), and its ungrouped
+  `find ... -name A -o -name B` changed what the implicit `-print` applied to
+  — adding an explicit `-print` made the same expression match nothing. Now
+  recurses, and truncates only oversized rotated logs.
+
+### DoH service (:8083)
+- `_decode_dns_name()` read `data[pos]` with **no bounds check**, so any
+  malformed query raised an unhandled `IndexError` and returned **HTTP 500**
+  with a traceback. It also had the same compression-pointer defect as the main
+  resolver. Fixed both; the POST path now returns 400 for malformed input and
+  502 for upstream failure.
+- `_dns_query_wire()` used a hardcoded 3 s socket timeout. A cache-miss that
+  escalates to DoH over the censored link takes ~2.4 s, so valid requests
+  intermittently failed with a spurious 502. Now `SOURAN_DOH_WIRE_TIMEOUT`
+  (default 12 s), matching the resolver's 25 s client timeout.
+- Verified 9/9: valid JSON GET 200, valid wire GET 200, valid wire POST 200, and
+  truncated / bad-label / pointer-loop / reserved-label / out-of-range-pointer
+  all 400. Zero 500s.
+
+### Also
+- `security-dashboard.py`: invalid `\|` escape sequences replaced with `grep -E`
+  and plain alternation (4 sites).
+- `cloudflared.service`: `After=dnsmasq.service` referenced a dangling unit
+  symlink; now `After=network-online.target souran-dns.service
+  souran-doh-fallback.service`.
+- All 25 Python modules now compile with zero warnings.
+
+Net effect: the watchdog went from "7 components unhealthy" with permanent
+restart storms to **zero unhealthy**, and the alarms that remain correspond to
+real conditions.
+
 ## [4.3.1] - 2026-10-04
 
 ### Fixed

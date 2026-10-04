@@ -62,45 +62,12 @@ generate_status() {
     local timestamp dns_status cloudflared_status tor_status watchdog_status
     
     timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    dns_status=$(systemctl is-active souran-dns 2>/dev/null || echo "inactive")
-    dns_status=$(echo "$dns_status" | tr -d '\n')
-    cloudflared_status=$(systemctl is-active cloudflared 2>/dev/null || echo "inactive")
-    cloudflared_status=$(echo "$cloudflared_status" | tr -d '\n')
-    tor_status=$(systemctl is-active tor 2>/dev/null || echo "inactive")
-    tor_status=$(echo "$tor_status" | tr -d '\n')
-    watchdog_status=$(systemctl is-active souran-watchdog 2>/dev/null || echo "inactive")
-    watchdog_status=$(echo "$watchdog_status" | tr -d '\n')
+    dns_status=$(systemctl is-active souran-dns 2>/dev/null | tr -d '\n' || echo "inactive")
+    cloudflared_status=$(systemctl is-active cloudflared 2>/dev/null | tr -d '\n' || echo "inactive")
+    tor_status=$(systemctl is-active tor 2>/dev/null | tr -d '\n' || echo "inactive")
+    watchdog_status=$(systemctl is-active souran-watchdog 2>/dev/null | tr -d '\n' || echo "inactive")
     
-    python3 << 'PYTHON_EOF'
-import json
-status = {
-    'service': 'Souran AI Network Server',
-    'version': '5.1.0',
-    'timestamp': 'TIMESTAMP_PLACEHOLDER',
-    'dns': 'DNS_PLACEHOLDER',
-    'cloudflared': 'CLOUDFLARE_PLACEHOLDER',
-    'tor': 'TOR_PLACEHOLDER',
-    'watchdog': 'WATCHDOG_PLACEHOLDER',
-    'ports': {'dnr': 53, 'api': 53443, 'admin': 8080, 'web': 8081, 'agent': 8082, 'tor': 9050},
-    'features': ['Recursive DNS', 'DNSSEC', 'DoT', 'DoH', 'Tor Bypass', 'Cloudflare Tunnel', 'Advanced Cache', 'Auto-Healing Watchdog', 'Zero-Block', 'Web Dashboard 8081', 'Agent Control 8082']
-}
-with open('/run/souran-ai-status.json', 'w') as f:
-    json.dump(status, f, indent=2)
-PYTHON_EOF
-    
-    # Now replace placeholders using Python
-    python3 -c "
-import json
-with open('/run/souran-ai-status.json', 'r') as f:
-    data = json.load(f)
-data['timestamp'] = '$timestamp'
-data['dns'] = '$dns_status'
-data['cloudflared'] = '$cloudflared_status'
-data['tor'] = '$tor_status'
-data['watchdog'] = '$watchdog_status'
-with open('/run/souran-ai-status.json', 'w') as f:
-    json.dump(data, f, indent=2)
-"
+    python3 /opt/souran-ai/status-helper.py "$timestamp" "$dns_status" "$cloudflared_status" "$tor_status" "$watchdog_status"
 }
 
 init() {
