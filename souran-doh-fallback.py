@@ -336,25 +336,37 @@ def _doh_json(url: str, qname: str, qtype: int, timeout: float = 8.0):
     ips = BOOTSTRAP.get(host)
     cmd_base = ["curl", "-s", "--max-time", str(int(timeout)),
                 "-H", "accept: application/dns-json"]
+    # Transport candidates, most-preferred first. Privoxy is the normal path;
+    # Tor SOCKS is a genuinely INDEPENDENT egress (different route, different
+    # censorship surface), so it survives privoxy dying or being wedged — which
+    # until now took every DNS answer with it, because both configured DoH
+    # providers were fetched through that one proxy.
+    #
+    # Measured on this host: privoxy 1.21 s, tor SOCKS 1.05 s, so Tor is not
+    # even the slower option. Tried in order and each failure moves to the next.
+    transports = []
     if PROXY:
-        # Route through the bypass proxy and clear conflicting inherited
-        # settings so the request cannot silently go out direct.
-        cmd_base += ["--proxy", PROXY, "-q"]
-    else:
-        cmd_base += ["-q"]
+        transports.append(["--proxy", PROXY, "-q"])
+    socks = os.environ.get("SOURAN_DOH_SOCKS", "socks5h://127.0.0.1:9050")
+    if socks:
+        transports.append(["--proxy", socks, "-q"])
+    if not transports:
+        transports.append(["-q"])
 
     attempts = []
-    if ips:
-        with _rr_lock:
-            _rr["n"] = (_rr["n"] + 1) % len(ips)
-            st = _rr["n"]
-        ordered = ips[st:] + ips[:st]
-        for ip in ordered:
-            # --resolve pins the IP while keeping SNI + cert check on host
-            attempts.append(cmd_base + ["--resolve", f"{host}:443:{ip}",
-                                        f"https://{host}{target}"])
-    else:
-        attempts.append(cmd_base + [f"https://{host}{target}"])
+    for tcmd in transports:
+        cmd_base_t = cmd_base + tcmd
+        if ips:
+            with _rr_lock:
+                _rr["n"] = (_rr["n"] + 1) % len(ips)
+                st = _rr["n"]
+            ordered = ips[st:] + ips[:st]
+            for ip in ordered:
+                # --resolve pins the IP while keeping SNI + cert check on host
+                attempts.append(cmd_base_t + ["--resolve", f"{host}:443:{ip}",
+                                             f"https://{host}{target}"])
+        else:
+            attempts.append(cmd_base_t + [f"https://{host}{target}"])
 
     # Bounded by an overall deadline, not by attempt count.
     #
