@@ -177,3 +177,42 @@ Stated plainly rather than left to be discovered:
   named server.
 - **A banned domain resolving is not a bug.** On this network a timeout or
   NXDOMAIN for a censored domain is the correct answer.
+## 5.2.0
+
+### Added
+- **Ad/tracker/malware blocking, 426,683 domains.** `souran_blocklists.py`
+  compiles three list formats (hosts, adblock `||domain^`, bare/wildcard)
+  into unbound `local-zone` + `local-data`, answering `0.0.0.0`. The
+  compiler ships; the 36 MB generated ruleset does not, and `postinst`
+  compiles on install when cached lists are present. Also suppresses this
+  censor's injected `adservice.google.com` answer.
+- **LAN name service.** `souran_lan.py` serves forward and reverse records
+  from operator entries, `/etc/hosts`, DHCP leases and this host's own
+  addresses. Only names with a real source are published — with no DHCP
+  server running it serves exactly one host rather than inventing
+  neighbours.
+- **Per-upstream DoH pacing** with a 4-wide concurrency window, replacing a
+  single global 0.9 s lock.
+
+### Fixed
+- The front-end rejected its own LAN answers. `10.0.0.0/8` is both this
+  censor's poison signature and this LAN's subnet, so the poison filter
+  discarded legitimate answers. The check is now scoped to names outside
+  the zones this resolver is authoritative for; it is unchanged everywhere
+  else.
+- `souran-doh-fallback.service` pinned `SOURAN_DOH_INTERVAL=0.9`, silently
+  defeating the pacing change — the measured improvement had been
+  in-process only until the pin was removed.
+- `/api/technitium/dhcp` returned a hardcoded DHCP range for a server that
+  is not running.
+- `souran_technitium.py` read a world-readable (0644) token from a path
+  that is not the one Technitium was configured with, so it could not
+  authenticate. It now reads the 0600 key and refuses any token file
+  readable by group or other.
+- `souran_blocklists.py`'s parser read only hosts format, silently
+  extracting zero domains from 428,000 lines of adblock and bare lists.
+
+### Measured
+- Cold concurrent p50 **17.5 s → 1.10 s**; warm 0.045 s.
+- Registry 33 features, 30 on, 3 off, 0 drifted, 0 unit restarts.
+- All five suites pass; lintian 0 errors.
