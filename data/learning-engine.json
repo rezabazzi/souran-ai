@@ -1,31 +1,22 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-10-05T01:06:09.708661+00:00",
+  "updated_at": "2026-10-05T01:11:32.151402+00:00",
   "uptime_seconds": 0,
-  "cycles": 1891,
+  "cycles": 1900,
   "resolution": {
-    "total_queries": 1891,
-    "tier1_hits": 66,
-    "tier2_hits": 61,
-    "poison_blocked": 35,
-    "failures": 4,
+    "total_queries": 1900,
+    "tier1_hits": 11,
+    "tier2_hits": 2,
+    "poison_blocked": 2,
+    "failures": 0,
     "latencies_ms": [],
     "top_domains": {}
   },
   "doh_endpoints": {
     "https://cloudflare-dns.com/dns-query": {
-      "success": 1717,
+      "success": 1726,
       "fail": 220,
       "latency_ms": [
-        1985.4,
-        1160.4,
-        3016.1,
-        2407.8,
-        1137.2,
-        1583.6,
-        1275.8,
-        1421.0,
-        1316.8,
         1625.7,
         1816.0,
         1155.8,
@@ -216,22 +207,22 @@
         4547.5,
         1485.0,
         1118.7,
-        1615.8
+        1615.8,
+        6079.8,
+        8375.9,
+        1195.8,
+        1195.6,
+        1741.2,
+        5586.4,
+        1636.7,
+        1117.5,
+        2005.6
       ]
     },
     "https://dns.google/resolve": {
-      "success": 1795,
+      "success": 1804,
       "fail": 142,
       "latency_ms": [
-        1503.0,
-        1056.8,
-        1075.5,
-        1231.3,
-        1331.5,
-        3496.3,
-        1885.2,
-        1550.1,
-        888.7,
         1629.8,
         2307.7,
         1175.5,
@@ -422,31 +413,31 @@
         2249.1,
         1074.5,
         1087.1,
-        1069.6
+        1069.6,
+        1108.0,
+        1127.8,
+        4240.9,
+        1011.4,
+        1769.0,
+        1159.2,
+        4980.9,
+        7298.1,
+        1231.7
       ]
     }
   },
   "doh_best_endpoint": "https://dns.google/resolve",
   "censorship": {
-    "poisoned_answers": 35,
+    "poisoned_answers": 2,
     "censored_names_blocked": [],
     "first_seen": {},
     "blocked_by_tier": {
       "tier1": 0,
-      "tier2": 1197
+      "tier2": 1206
     }
   },
   "cache": {
     "hit_rate_history": [
-      0.5,
-      0.0,
-      0.0,
-      0.083,
-      0.077,
-      0.077,
-      0.0,
-      0.0,
-      0.0,
       0.0,
       0,
       0.0,
@@ -537,7 +528,16 @@
       0.333,
       0.0,
       0.0,
-      0.0
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.2,
+      0.2,
+      0.2,
+      0.167,
+      0.25
     ],
     "recommended_ttl": 600,
     "prefetch_candidates": []

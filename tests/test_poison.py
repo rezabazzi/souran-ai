@@ -99,6 +99,59 @@ CASES = [
 ]
 
 
+def test_poisoned_payload_is_never_served():
+    """The killer test: tier-1 poisoned AND DoH unreachable.
+
+    is_poison() detecting the injection is worthless if the detected
+    payload is then served anyway. That is what happened: the counter
+    incremented and nothing was cached, but `payload` stayed bound, so
+
+        return payload if payload else None
+
+    handed the client 10.10.34.36 whenever both DoH endpoints failed.
+
+    On a censored link DoH is least reliable exactly when it matters, so
+    this was a live leak. This asserts the whole path, not just the
+    classifier.
+    """
+    import struct
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "fb_poisonpath", os.path.join(ROOT, "souran-doh-fallback.py"))
+    F = importlib.util.module_from_spec(spec)
+    sys.modules["fb_poisonpath"] = F
+    spec.loader.exec_module(F)
+
+    def sinkhole(qname, qtype=1, timeout=5.0):
+        """Tier-1 answer carrying the censor's 10.10.34.36 injection."""
+        qid = 0x5355
+        parts = []
+        for label in qname.split("."):
+            b = label.encode()
+            parts.append(bytes([len(b)]) + b)
+        q = b"".join(parts) + b"\x00" + struct.pack("!HH", qtype, 1)
+        ans = b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, 4) + \
+            b"\x0a\x0a\x22\x24"          # 10.10.34.36
+        return struct.pack("!HHHHHH", qid, 0x8180, 1, 1, 0, 0) + q + ans
+
+    F.ask_unbound = sinkhole
+    F._doh_json = lambda *a, **k: None      # both endpoints unreachable
+    F._doh_get = lambda *a, **k: None
+    F._doh_rdata = lambda *a, **k: None
+    F._cache.clear()
+    F._negcache.clear()
+
+    out, _ = F.resolve("telegram.org", 1)
+    if out is None:
+        return True, "resolve() -> None, handler emits SERVFAIL (correct)"
+    ips = F.answer_addresses(out)[0]
+    leaked = [ip for ip in ips if F.is_poison(ip)]
+    if leaked:
+        return False, f"POISON SERVED TO CLIENT: {leaked}"
+    return True, f"resolved cleanly to {ips}"
+
+
 def main():
     print("=" * 74)
     print("Souran v5.1.0 — poison detection (IPv4 + IPv6)")
@@ -117,6 +170,13 @@ def main():
         if not ok:
             fails.append(f"{ip}: expected {want}, got {got}")
 
+    # --- the whole path: detect AND refuse to serve ---------------------
+    print("\n--- a detected poison must never reach the client ---")
+    ok, detail = test_poisoned_payload_is_never_served()
+    print(f"  {'PASS' if ok else 'FAIL'}  tier-1 poisoned + DoH down: {detail}")
+    if not ok:
+        fails.append(detail)
+
     print()
     print("=" * 74)
     if fails:
@@ -125,8 +185,10 @@ def main():
             print("  - " + f)
         print("=" * 74)
         return 1
-    print(f"ALL {len(CASES)} POISON-DETECTION TESTS PASS")
-    print("including 9 real public IPv6 addresses that must NOT be flagged")
+    print(f"ALL {len(CASES) + 1} POISON-DETECTION TESTS PASS")
+    print(f"  {len(CASES)} classifier cases, including 9 real public IPv6")
+    print("  addresses that must NOT be flagged, plus 1 end-to-end case:")
+    print("  a detected poison must never be served to the client")
     print("=" * 74)
     return 0
 

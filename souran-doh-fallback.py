@@ -757,7 +757,29 @@ def _resolve_uncached(qname: str, qtype: int):
                     _cache_put((qname.lower(), qtype), payload, 300)
                     return payload, False
                 if poisoned:
-                    STATS["poisoned"] += 1   # never cache or serve an injected answer
+                    # DROP the payload. This is the whole point of the check.
+                    #
+                    # The counter incremented and nothing was cached, but
+                    # `payload` stayed bound. If both DoH endpoints then
+                    # failed, the function fell through to
+                    #     return payload if payload else None
+                    # and handed the client the injected answer just
+                    # rejected -- 10.10.34.36, the censor's sinkhole.
+                    #
+                    # Reproduced exactly, by stubbing ask_unbound() to
+                    # return the sinkhole and _doh_json() to fail:
+                    #     resolve("telegram.org", A)
+                    #       -> rcode=0 answers=1
+                    #       -> ADDRESSES SERVED: ['10.10.34.36']
+                    #
+                    # Every defence downstream of this line was therefore
+                    # moot: the filter detected the poison correctly and
+                    # then served it anyway whenever DoH was unavailable.
+                    # On a censored link that is exactly when DoH is least
+                    # reliable, so this is a live leak, not a theoretical
+                    # one.
+                    STATS["poisoned"] += 1
+                    payload = None
                 elif has_rrs:
                     # Answer holds RRs, just not the requested type. That is a
                     # real NODATA/CNAME-chain situation — trust it (e.g. a
@@ -834,7 +856,12 @@ def _resolve_uncached(qname: str, qtype: int):
             return good, True
 
     STATS["fail"] += 1
-    return payload if payload else None, False
+    # Belt and braces: `payload` is only non-None here if it was accepted
+    # by every check above, because every rejection path now clears it.
+    # Returning None makes the handler emit SERVFAIL, which is the correct
+    # answer for "this answer is poisoned and no trustworthy tier is
+    # reachable" -- far better than serving an injected address.
+    return (payload if payload else None), False
 
 
 def _name_is_legal(qname: str) -> bool:
