@@ -91,16 +91,30 @@ done
 # both misleading and, since 1.24.2 is affected by CVE-2026-85501
 # (ReTrap DNSSEC algorithmic-complexity DoS), vulnerable.
 UNBOUND_EXPECTED="1.26.2"
-if [ -x "$DEST/engine/unbound/sbin/unbound" ]; then
-    got="$("$DEST/engine/unbound/sbin/unbound" -V 2>/dev/null | head -1 \
-          | awk '{print $2}')"
-    if [ "$got" != "$UNBOUND_EXPECTED" ]; then
-        echo "souran-deb: REFUSING — expected unbound $UNBOUND_EXPECTED," >&2
-        echo "             payload contains ${got:-unknown}" >&2
-        exit 1
-    fi
-    echo "souran-deb: unbound $got (CVE-2026-85501 patched)"
+
+# FAIL CLOSED ON A MISSING RESOLVER.
+#
+# This check used to be wrapped in `if [ -x ... ]`, so a build with no
+# unbound binary in the payload skipped the CVE verification entirely and
+# still produced a valid, installable .deb -- one that installs a DNS
+# server containing no resolver. A gate that is skipped when the thing it
+# guards is absent is not a gate.
+if [ ! -x "$DEST/engine/unbound/sbin/unbound" ]; then
+    echo "souran-deb: REFUSING — no resolver binary in the payload." >&2
+    echo "             $DEST/engine/unbound/sbin/unbound is missing, so the" >&2
+    echo "             CVE check cannot be performed and the package would" >&2
+    echo "             install without a working DNS core." >&2
+    exit 1
 fi
+
+got="$("$DEST/engine/unbound/sbin/unbound" -V 2>/dev/null | head -1 \
+      | awk '{print $2}')"
+if [ "$got" != "$UNBOUND_EXPECTED" ]; then
+    echo "souran-deb: REFUSING — expected unbound $UNBOUND_EXPECTED," >&2
+    echo "             payload contains ${got:-unknown}" >&2
+    exit 1
+fi
+echo "souran-deb: unbound $got (CVE-2026-85501 patched)"
 
 # --- censorship config, dns config --------------------------------------
 if [ -d censorship/config ]; then
