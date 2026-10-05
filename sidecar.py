@@ -515,6 +515,49 @@ async def auth_state():
     return souran_auth.audit_token_state()
 
 
+@app.get("/api/auth/verify")
+async def auth_verify(request: Request):
+    """Verify a caller-supplied token. Used by nginx's auth_request gate.
+
+    This exists because the sidecar exempts LOOPBACK callers from token
+    auth -- correctly, so the watchdog and the test suites can drive it
+    without credentials. But nginx proxies over loopback, so every request
+    that arrived through nginx looked like a trusted local caller.
+
+    Measured with no credentials, through the Cloudflare-published
+    hostname:
+        GET  /api/watchdog/status -> 200 (full JSON)
+        POST /api/watchdog/reset  -> 200
+
+    nginx now calls THIS endpoint before proxying, so the real client
+    must present a token.
+
+    Two things make this safe rather than another loop:
+
+    * It validates the credential nginx forwards in
+      X-Original-Authorization / X-Api-Key -- the header the CLIENT sent,
+      not anything nginx invents.
+    * It deliberately does NOT consult the loopback exemption. It is the
+      one endpoint that must not trust its own connection, because
+      trusting it is precisely the bug being fixed.
+
+    200 = valid, 401 = not. Nothing else is returned.
+    """
+    presented = (request.headers.get("x-original-authorization")
+                 or request.headers.get("x-api-key")
+                 or request.headers.get("authorization")
+                 or "")
+    token = presented.strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    elif token.lower().startswith("x-api-key:"):
+        token = token[10:].strip()
+    if token and souran_auth.token_is_valid(token):
+        return {"ok": True}
+    return JSONResponse({"ok": False}, status_code=401,
+                        headers={"WWW-Authenticate": "Bearer"})
+
+
 # --------------------------------------------------------------------------
 # FEATURE REGISTRY (v5.1.0)
 # --------------------------------------------------------------------------
