@@ -419,7 +419,43 @@ async def technitium_blocked(domain: str = None):
 
 @app.get("/api/technitium/dhcp")
 async def technitium_dhcp():
-    return {"enabled": False, "range": "192.168.1.100-192.168.1.200", "lease_time": "24h"}
+    """Report the REAL DHCP state, or say plainly that there is none.
+
+    This used to return a hardcoded literal:
+
+        {"enabled": False, "range": "192.168.1.100-192.168.1.200",
+         "lease_time": "24h"}
+
+    A DHCP range and lease time for a server that is not running, with no
+    live call behind it. That is the exact class of confident falsehood
+    this project's registry was built to eliminate -- a consumer could
+    not distinguish it from a real reading, and the range even looked
+    plausible for an ISP-issued pool.
+
+    Technitium is not running (verified: no unit, nothing on :53443), so
+    the honest answer is that DHCP is not served here at all. Ranges are
+    read from dnsmasq if it is configured, and omitted rather than
+    invented otherwise.
+    """
+    out = {"enabled": False, "source": None, "range": None,
+           "lease_time": None,
+           "note": "no DHCP service is running on this host"}
+    for path in ("/etc/dnsmasq.conf", "/etc/dnsmasq.d/souran.conf"):
+        try:
+            with open(path) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = (x.strip() for x in line.split("=", 1))
+                    if k == "dhcp-range" and out["range"] is None:
+                        out["range"] = v
+                        out["source"] = path
+                    elif k == "dhcp-lease-max" and out["lease_time"] is None:
+                        out["lease_time"] = v
+        except OSError:
+            continue
+    return out
 
 @app.get("/api/web3/ens")
 async def web3_ens(name: str = "vitalik.eth"):

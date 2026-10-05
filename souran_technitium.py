@@ -44,11 +44,23 @@ import urllib.request
 # Where Technitium's HTTPS API listens. Loopback only.
 DEFAULT_BASE = os.environ.get("SOURAN_TECHNITIUM_URL",
                               "https://127.0.0.1:53443")
+# Searched in order. The FIRST path is the one that actually holds the
+# live key: /opt/souran-ai/dns/api-key.txt, mode 0600 unbound:unbound.
+#
+# The old first entry was /etc/dns/api-token.txt -- world-readable
+# (0644), a DIFFERENT file from the one Technitium was actually configured
+# with, and 0644 for an API credential is wrong regardless of which one
+# it is. Verified: the two files differ, so the client could not
+# authenticate as configured even while Technitium was running.
 TOKEN_FILES = [
     os.environ.get("SOURAN_TECHNITIUM_TOKEN_FILE", ""),
+    "/opt/souran-ai/dns/api-key.txt",
     "/etc/dns/api-token.txt",
     "/etc/souran/technitium-token",
 ]
+
+# An API credential must not be readable by group or other.
+TOKEN_MAX_MODE = 0o077
 
 # Endpoints this client is permitted to call. Anything not listed here is
 # refused locally, so a compromised caller cannot reach an arbitrary
@@ -101,10 +113,21 @@ class TechnitiumError(Exception):
 
 
 def _read_token() -> str:
+    import stat as _stat
     for path in TOKEN_FILES:
         if not path:
             continue
         try:
+            st = os.stat(path)
+            # Refuse a credential anyone but the owner can read. Reading
+            # it anyway would mean an API key sitting world-readable on
+            # disk is treated as trustworthy, which is the opposite of
+            # what a mode check is for.
+            if _stat.S_IMODE(st.st_mode) & TOKEN_MAX_MODE:
+                print(f"[souran-technitium] refusing {path}: mode "
+                      f"{_stat.S_IMODE(st.st_mode):04o} is readable by "
+                      f"group/other", flush=True)
+                continue
             with open(path) as fh:
                 tok = fh.read().strip()
             if tok:
