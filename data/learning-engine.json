@@ -1,27 +1,22 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-10-05T01:40:24.238736+00:00",
+  "updated_at": "2026-10-05T01:43:06.006752+00:00",
   "uptime_seconds": 0,
-  "cycles": 1950,
+  "cycles": 1955,
   "resolution": {
-    "total_queries": 1950,
-    "tier1_hits": 81,
-    "tier2_hits": 76,
-    "poison_blocked": 42,
+    "total_queries": 1955,
+    "tier1_hits": 85,
+    "tier2_hits": 81,
+    "poison_blocked": 47,
     "failures": 10,
     "latencies_ms": [],
     "top_domains": {}
   },
   "doh_endpoints": {
     "https://cloudflare-dns.com/dns-query": {
-      "success": 1774,
+      "success": 1779,
       "fail": 222,
       "latency_ms": [
-        2134.7,
-        2052.7,
-        1626.5,
-        1522.7,
-        855.8,
         1200.1,
         1117.1,
         874.0,
@@ -216,18 +211,18 @@
         1500.9,
         1847.3,
         1621.2,
-        1258.0
+        1258.0,
+        1215.2,
+        692.9,
+        901.5,
+        1256.3,
+        1216.8
       ]
     },
     "https://dns.google/resolve": {
-      "success": 1853,
+      "success": 1858,
       "fail": 143,
       "latency_ms": [
-        1117.1,
-        1028.2,
-        948.9,
-        1685.7,
-        1843.1,
         2662.3,
         1591.9,
         1535.9,
@@ -422,27 +417,27 @@
         1331.8,
         1626.2,
         1245.7,
-        1062.0
+        1062.0,
+        1021.3,
+        699.8,
+        1274.2,
+        2284.8,
+        625.7
       ]
     }
   },
   "doh_best_endpoint": "https://dns.google/resolve",
   "censorship": {
-    "poisoned_answers": 42,
+    "poisoned_answers": 47,
     "censored_names_blocked": [],
     "first_seen": {},
     "blocked_by_tier": {
       "tier1": 0,
-      "tier2": 1255
+      "tier2": 1260
     }
   },
   "cache": {
     "hit_rate_history": [
-      0.0,
-      0.5,
-      0.5,
-      0.25,
-      0.2,
       0,
       0.0,
       0.0,
@@ -536,6 +531,11 @@
       0.125,
       0.125,
       0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
       0.0,
       0.0
     ],

@@ -78,7 +78,8 @@ def run_souran_toggle(feature, state):
     """Run souran-toggle via sudo.
 
     v5.0.0: this used to embed the operator's plaintext sudo password
-    ('<redacted>\\n') and pipe it to `sudo -S`. That is a plaintext credential
+    a plaintext sudo password and pipe it to `sudo -S`. That is a
+    plaintext credential
     committed in a service file: anyone who could read the source, a core
     dump, or a world-readable copy of this file owned the box. It also
     did not even work for its purpose -- the unit already runs as User=reza
