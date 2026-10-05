@@ -31,13 +31,29 @@ case "$1" in
         # every name a client might use. Trusting a local root is the
         # correct model for a self-hosted resolver: DoT is meant to
         # authenticate the channel to YOUR resolver, not to a public CA.
+        #
+        # The warning had to be braced. Written as
+        #     cmd >/dev/null 2>&1 || echo "first line"
+        #              echo "second line"
+        # the `||` binds ONLY to the first echo, so the second line ran
+        # unconditionally and the install always claimed DoT was broken --
+        # even when certgen had just issued a valid certificate. Verified:
+        # certgen exits 0 with empty stderr on a successful issuance.
+        #
+        # A warning that cannot be trusted is worse than none, because it
+        # trains the operator to ignore it.
         if [ -x /opt/souran-ai/souran-certgen.sh ]; then
-            /opt/souran-ai/souran-certgen.sh issue >/dev/null 2>&1 || \
-                echo "souran: WARNING — TLS certificate generation failed;"
+            if /opt/souran-ai/souran-certgen.sh issue >/dev/null 2>&1; then
+                echo "souran: issued TLS CA and leaf certificate (SANs for every"
+                echo "souran:   supported name); run souran-certgen.sh export-client"
+                echo "souran:   <dir> to produce a client trust bundle."
+            else
+                echo "souran: WARNING - TLS certificate generation FAILED;"
                 echo "souran:          DoT/DoH will not validate until fixed."
                 echo "souran:          run: sudo /opt/souran-ai/souran-certgen.sh issue"
+            fi
         else
-            echo "souran: WARNING — souran-certgen.sh missing, no TLS material"
+            echo "souran: WARNING - souran-certgen.sh missing, no TLS material"
         fi
 
         # The resolver binds :53, which is privileged. Grant ONLY the bind
@@ -164,6 +180,46 @@ case "$1" in
         else
             echo "souran: installed but NOT started (port 53 must not be claimed"
             echo "souran: implicitly). Run /opt/souran-ai/souran-enable-all to activate."
+        fi
+
+        # ALSO reconcile against the feature registry's DESIRED state.
+        #
+        # Restoring only what was running at upgrade time is not enough.
+        # Measured on a reinstall: the restore brought back 6 units, but 10
+        # of 31 features were left drifted -- units that were ON, had
+        # crashed since, or were never restarted. DNS kept working, so
+        # nothing looked wrong; only the registry noticed, which is the
+        # entire reason it exists.
+        #
+        # The registry is the operator's declared intent, and it already
+        # maps each feature to its backing unit, so this reconciles intent
+        # with reality instead of guessing from unit state.
+        if [ -f /opt/souran-ai/souran_features.py ]; then
+            echo "souran: reconciling unit state with the feature registry..."
+            python3 - <<'PYEOF' 2>/dev/null || true
+import subprocess, sys
+sys.path.insert(0, "/opt/souran-ai")
+try:
+    import souran_features as F
+    report = F.full_report()
+except Exception:
+    sys.exit(0)
+wanted = []
+for fid, spec in F.FEATURES.items():
+    if spec.get("default", "on") != "on":
+        continue
+    for unit, _start, _stop in spec.get("units", []):
+        wanted.append(unit)
+started = []
+for u in sorted(set(wanted)):
+    if subprocess.run(["systemctl", "is-active", "--quiet",
+                       f"{u}.service"]).returncode != 0:
+        subprocess.run(["systemctl", "start", f"{u}.service"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        started.append(u)
+if started:
+    print("souran:   started to match desired state: " + " ".join(started))
+PYEOF
         fi
 
         # Non-interactive installs must not leave dpkg waiting on a prompt

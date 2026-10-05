@@ -4,7 +4,7 @@
 import subprocess,json,re,time,os
 from datetime import datetime,timezone
 from collections import defaultdict
-CONFIG={"log_files":["/var/log/souran-ai.log","/var/log/souran-ai-watchdog.log","/var/log/souran-security-audit.log","/var/log/auth.log","/var/log/syslog","/var/log/fail2ban.log"],"check_interval":30,"alert_log":"/var/log/souran-ids-alerts.log","thresholds":{"failed_auths":5,"port_scan":10},"whitelist":["127.0.0.1","::1"]}
+CONFIG={"log_files":["/var/log/souran-ai.log","/var/log/souran-ai-watchdog.log","/var/log/souran-security-audit.log","/var/log/auth.log","/var/log/syslog","/var/log/fail2ban.log"],"check_interval":30,"alert_log":"/opt/souran-ai/logs/ids-alerts.log","thresholds":{"failed_auths":5,"port_scan":10},"whitelist":["127.0.0.1","::1"]}
 class IDS:
     def __init__(self): self.auth_count=defaultdict(int); self.blocked=set()
     def parse_logs(self,path):
