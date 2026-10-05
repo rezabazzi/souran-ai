@@ -216,3 +216,18 @@ Stated plainly rather than left to be discovered:
 - Cold concurrent p50 **17.5 s → 1.10 s**; warm 0.045 s.
 - Registry 33 features, 30 on, 3 off, 0 drifted, 0 unit restarts.
 - All five suites pass; lintian 0 errors.
+
+### Fixed (5.2.0, second pass)
+- **The firewall had revoked LAN access.** Every LAN-scoped rule was written
+  against `10.103.26.0/24`, the host's address when they were written. The
+  address is now `192.168.1.5/24`, so those rules matched nothing and
+  INPUT's default-deny dropped every LAN connection — measured from a client
+  namespace on the real subnet, ports 53, 8082, 8383, 8083 and 853 were all
+  BLOCKED. The resolver was unreachable from the network it exists to serve.
+  The subnet is now derived from the interface holding the default route, so
+  a DHCP change cannot silently revoke LAN access again.
+- **`tests/test_firewall.py` passed throughout that outage** because it
+  hardcoded the same stale subnet and so verified the rules against a
+  network that no longer existed on this host. It derives the subnet the
+  same way the ruleset does, and now catches the fault when the stale value
+  is reintroduced.
