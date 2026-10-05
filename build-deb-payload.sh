@@ -30,7 +30,19 @@ mkdir -p "$DEST" "$DEB/$LIBDIR/systemd/system" "$DEST/logs"
 
 # --- Python modules, metadata, control scripts --------------------------
 cp -a ./*.py "$DEST/"
-for f in VERSION CHANGELOG.md README.md souran-toggle toggles.conf \
+# README.md and CHANGELOG.md are deliberately NOT shipped in the payload.
+#
+# dpkg unpacks straight over /opt/souran-ai, and here the source tree IS
+# the deployed tree -- so shipping docs means every `dpkg -i` overwrites
+# the working copy with whatever was on disk at build time. That is data
+# loss, not a cosmetic issue: it silently destroyed a 12 KB README across
+# two consecutive installs and left the stale v0.1.0 text in place with no
+# error anywhere.
+#
+# Documentation belongs in the repository and on the package's own docs
+# page, not in a payload that clobbers the user's tree. dh_installdocs
+# already handles the /usr/share/doc copy via debian/copyright.
+for f in VERSION souran-toggle toggles.conf \
          install-souran.sh souran-enable-all \
          souran_auth.py souran_features.py souran_portmap.py \
          souran_technitium.py souran_dashboard.py souran_client.py \
