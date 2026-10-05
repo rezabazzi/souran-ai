@@ -2,7 +2,11 @@ Source: souran
 Section: net
 Priority: optional
 Maintainer: Souran AI Network Server <souran@sitet.top>
-Build-Depends: debhelper-compat (= 13), fakeroot
+Build-Depends: debhelper-compat (= 13), fakeroot,
+ build-essential,
+ libssl-dev, libevent-dev, libexpat1-dev,
+ flex, bison, pkg-config,
+ libnghttp2-dev, protobuf-c-compiler, libprotobuf-c-dev
 Standards-Version: 4.7.0
 Rules-Requires-Root: no
 

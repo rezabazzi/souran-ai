@@ -16,15 +16,38 @@
 	dh $@
 
 override_dh_auto_build:
-	# --- unbound: build from the vendored source tree -------------------
-	# `make` is invoked literally, never via $(MAKE): dpkg-buildpackage
-	# does not define MAKE as a shell variable, so $(MAKE) expands to
-	# empty and the shell falls through to `fg`, which fails the build
-	# with the misleading "line 10: fg: no job control".
-	if [ -d engine/unbound-src ]; then \
-	    echo "souran: building unbound from engine/unbound-src"; \
-	    ( cd engine/unbound-src && make -j"$(nproc)" ) ; \
-	fi
+	# --- unbound: build from the PINNED source tree ---------------------
+	#
+	# This used to be `if [ -d engine/unbound-src ]; then ... fi`, which a
+	# clean `git clone` skips silently: the source is not tracked, so a
+	# fresh build produced a .deb containing NO resolver and no error.
+	# build-deb-payload.sh now refuses such a payload, but the build should
+	# not get that far -- it fetches the pinned tree itself.
+	#
+	# The tree is an UNRELEASED upstream commit (see engine/PROVENANCE.md):
+	# unbound-1.26.2.tar.gz returns 404, and 1.26.1 -- the newest published
+	# release -- does NOT contain the CVE-2026-85501 fix. So the source is
+	# pinned by commit, and fetch-unbound.sh verifies the fix is present
+	# before returning.
+	#
+	# EVERY conditional below is a SINGLE line on purpose. Make passes each
+	# recipe line to its own shell unless the line ends in a backslash, so a
+	# multi-line `if ... fi` block is delivered to /bin/sh with the `fi`
+	# missing:
+	#
+	#     /bin/sh: 1: Syntax error: end of file unexpected (expecting "fi")
+	#
+	# That error names the shell, not the real cause, which is a recipe
+	# spanning several shells. `make -n` does not catch it; only an actual
+	# build does.
+	[ -d engine/unbound-src ] || ./fetch-unbound.sh engine/unbound-src
+	@test -f engine/unbound-src/.souran-provenance || \
+	    { echo "souran: ERROR - engine/unbound-src has no provenance marker," >&2; \
+	      echo "souran:        so it cannot be shown to be the patched tree." >&2; \
+	      echo "souran:        Run ./fetch-unbound.sh engine/unbound-src" >&2; \
+	      exit 1; }
+	@echo "souran: building unbound from the pinned tree"
+	cd engine/unbound-src && make -j"$$(nproc)"
 	# --- go/optional components ----------------------------------------
 	if [ -x ./build.sh ]; then ./build.sh; fi
 

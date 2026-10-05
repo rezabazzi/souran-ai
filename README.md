@@ -4,7 +4,7 @@ A censorship-resistant, self-hosted recursive DNS resolver and circumvention
 stack for Linux. Built from source. No upstream forwarders, no black-box
 binaries, no third-party resolver in the path.
 
-**Version 5.1.0** · GPL-3.0-or-later · Python 3.12+ · unbound 1.26.2
+**Version 5.2.0** · GPL-3.0-or-later · Python 3.12+ · unbound 1.26.2
 
 ---
 
@@ -220,7 +220,7 @@ Three properties this client will not compromise:
 | Host firewall | nftables, INPUT default-deny; OUTPUT deliberately unfiltered |
 | TLS | local root CA + SAN-bearing leaf; keys root-owned, group-readable only by the two services that need them |
 | Poison detection | IPv4 **and** IPv6, including this network's string-appended AAAA forgery |
-| Resolver version | unbound 1.26.2 — patched for CVE-2026-85501, with the advisory's limits set explicitly |
+| Resolver version | unbound 1.26.2 (an **unreleased** upstream commit) — patched for CVE-2026-85501, with the advisory's limits set explicitly. See `engine/PROVENANCE.md`. |
 | Secrets | never in the source tree, never in the package, never in git |
 
 ### CVE-2026-85501 ("ReTrap")
@@ -232,11 +232,19 @@ unbounded work through TagTrap, DelegationTrap, NsecTrap or
 AdditionalTrap — a directly triggerable availability attack against a
 resolver whose entire purpose is availability on a hostile network.
 
-Fixed by building 1.26.2 from source and **replacing the vendored source
-too**, since the package compiles from `engine/unbound-src` and a rebuild
-would otherwise have shipped the vulnerable version again while looking
-successful. `build-deb-payload.sh` now refuses to package any resolver
-binary that is not 1.26.2.
+Fixed by building from a pinned upstream commit that carries the fix, and
+**replacing the vendored source tree** so the vulnerable binary could not be
+reused. `fetch-unbound.sh` fetches that commit and verifies the fix is
+present before returning; `build-deb-payload.sh` refuses to package any
+resolver whose `-V` output is not exactly `1.26.2`, and refuses to package a
+payload with no resolver in it at all.
+
+Note that **1.26.2 was never released**: `unbound-1.26.2.tar.gz` returns 404
+from nlnetlabs.nl, and the newest published release, 1.26.1, does *not*
+contain the fix. That is why the tree is pinned by commit hash rather than
+by version string — a version nobody can resolve is not a reproducible build
+instruction. `engine/PROVENANCE.md` records the proof, including the symbol
+comparison showing 1.26.1 is unpatched.
 
 ### Two judgement calls worth stating
 
@@ -307,7 +315,9 @@ souran-firewall.sh          nftables control
 souran-feature-apply.sh     privileged actuator (allowlisted actions only)
 souran-feature-executor.sh  root executor for the intent queue
 config/souran-firewall.nft  the ruleset
-engine/unbound-src/         unbound 1.26.2, compiled during the build
+fetch-unbound.sh           fetches the pinned, patched unbound tree
+engine/unbound-src/         unbound 1.26.2 (fetched, not tracked), compiled in the build
+engine/PROVENANCE.md        which commit, and why 1.26.1 is not a substitute
 debian/                     package metadata and maintainer scripts
 tests/                      regression suites
 ```
