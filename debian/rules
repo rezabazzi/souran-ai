@@ -58,6 +58,13 @@ override_dh_auto_test:
 	if [ -x test_suite.py ] || [ -f test_suite.py ]; then \
 	    python3 test_suite.py || true; \
 	fi
+	# The feature-registry suite is read-only: it calls no actuator and
+	# changes no unit, so it is safe inside a package build the way the
+	# binding suites are not. It guards the control plane, which is where
+	# seven features once reported success while changing nothing.
+	if [ -f tests/test_features.py ]; then \
+	    python3 tests/test_features.py || true; \
+	fi
 
 override_dh_installsystemd:
 	# Ship every unit but do not start anything at install time. Enabling

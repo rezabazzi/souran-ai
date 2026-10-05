@@ -420,6 +420,19 @@ FEATURES = {
 # Probe helpers (injected into the probe expression scope)
 # --------------------------------------------------------------------------
 def _run(cmd, timeout=8):
+    """Run a probe command.
+
+    THE TIMEOUT MUST EXCEED ANY `--max-time` IN THE COMMAND ITSELF, or
+    subprocess kills curl first and the probe reports the service as down
+    while it is answering perfectly.
+
+    That is not hypothetical. `web3_rpc_ok()` asked curl for `--max-time
+    40` while _run's own default was 8, so every ENS lookup slower than 8 s
+    was reported as the feature being OFF: measured 2 failures in 8 calls,
+    both at exactly 8.0 s, while the identical raw curl returned HTTP 200
+    on 8 of 8. Raising curl's budget alone changed nothing, because the
+    outer timeout is what actually fires.
+    """
     try:
         r = subprocess.run(cmd, shell=True, capture_output=True,
                            text=True, timeout=timeout)
@@ -630,9 +643,19 @@ def web3_rpc_ok() -> bool:
     serving. Query the real endpoint and accept any well-formed JSON
     answer, including an empty result set, as proof of life.
     """
+    # 40 s, not 10. Measured: a cold ENS lookup takes ~20 s on this link --
+    # it is an on-chain name resolution over a censored upstream -- and the
+    # old 10 s budget made this probe report the feature OFF while the
+    # service was answering perfectly. curl then hung up mid-response, which
+    # surfaced in the journal as a BrokenPipeError and read like a server
+    # fault rather than a client giving up too early.
+    #
+    # A false negative is still a lie about reality, so the budget comes
+    # from a measurement rather than a guess.
     rc, out, _ = _run(
-        "curl -s --max-time 10 "
-        "'http://127.0.0.1:8086/api/web3/ens?name=vitalik.eth'")
+        "curl -s --max-time 40 "
+        "'http://127.0.0.1:8086/api/web3/ens?name=vitalik.eth'",
+        timeout=55)
     if rc != 0 or not out:
         return False
     try:

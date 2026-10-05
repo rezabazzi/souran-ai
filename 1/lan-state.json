@@ -1,0 +1,15 @@
+{
+  "hosts": {
+    "souran": "192.168.1.5"
+  },
+  "reverse": {
+    "5.1.168.192.in-addr.arpa.": "souran.souran.lan."
+  },
+  "counts": {
+    "operator": 0,
+    "etc_hosts": 0,
+    "dhcp_leases": 0
+  },
+  "lease_files": [],
+  "compiled_at": "2026-10-05T13:24:18.817244+00:00"
+}
