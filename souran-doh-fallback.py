@@ -589,7 +589,18 @@ def _doh_json(url: str, qname: str, qtype: int, timeout: float = 8.0):
             # Acquire a slot in this upstream's window, and ALWAYS
             # release it. Omitting the release leaks a permit and the
             # fourth miss deadlocks every subsequent DoH query.
-            gate_key = cmd[1] if len(cmd) > 1 else "default"
+            # KEY ON THE UPSTREAM, NOT ON cmd[1].
+            #
+            # cmd[1] is "-s", curl's silent flag, so every attempt for every
+            # upstream collided on the single key "-s": exactly one gate was
+            # built and the whole point of per-upstream pacing -- two
+            # providers not blocking each other -- was defeated while the
+            # comment above described behaviour the code did not have.
+            #
+            # `host` is the provider, so key on that. Bootstrap IPs for one
+            # provider deliberately SHARE a gate: from the censor's point of
+            # view they are a single upstream and must be paced together.
+            gate_key = host
             # contextlib guarantees the permit is released on EVERY exit
             # path -- success, `continue` on a bad rc, and timeout. A
             # plain try/finally would have needed the `continue`s

@@ -472,7 +472,31 @@ def main(argv=None):
     p.set_defaults(fn=lambda a: remove(a.name))
     a = ap.parse_args(argv)
     r = a.fn(a)
-    return 0 if r in (0, None, (None, None), ({}, True)) else 1
+    # Truthiness, not membership. The old allowlist `(0, None, (None,None),
+    # ({}, True))` predates compile() growing a return value, so a
+    # SUCCESSFUL compile returning ({'domains': N, 'reverse': M}, True) was
+    # not in it and the script exited 1. Measured: `souran_lan.py compile`
+    # exited 1 on every run while writing a correct zone, so
+    # `lan_names enable` -- which does `compile || return 1` -- could never
+    # succeed, while `lan_names disable` worked. A one-way toggle.
+    # A handler returns:
+    #   None            -> nothing to do, success
+    #   True            -> success
+    #   (result, ok)    -> ok is the verdict (compile/ensure_include)
+    #   int             -> an explicit EXIT CODE: 0 ok, non-zero failure
+    # The int case is why truthiness is wrong: `add` returns 1 to mean
+    # FAILURE, and `if r` would read that as success. That bug was
+    # introduced by the first version of this fix and caught by testing
+    # `add badhost notanip`, which correctly refuses and must exit 1.
+    if isinstance(r, bool):
+        return 0 if r else 1
+    if isinstance(r, int):
+        return 0 if r == 0 else 1
+    if isinstance(r, tuple):
+        return 0 if r[-1] is not False else 1
+    if r is None:
+        return 0
+    return 0
 
 
 if __name__ == "__main__":

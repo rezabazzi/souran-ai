@@ -24,26 +24,59 @@ TABLE="souran_filter"
 # excluded: a VPN or a container bridge is not the LAN, and allowing
 # 10.0.0.0/8 to reach :53 would re-open the amplifier this ruleset exists
 # to prevent.
+_valid_subnet() {
+    # A malformed subnet becomes a syntax error in the ruleset, and under
+    # the old delete-then-load order that meant no firewall at all. The
+    # FALLBACK is validated too, because SOURAN_FALLBACK_LAN is an
+    # environment variable and "0.0.0.0/0" would otherwise open the LAN
+    # service set to the entire internet.
+    case "$1" in
+        ""|*[!0-9./]*) return 1 ;;
+        */0|*/1|*/2|*/3) return 1 ;;
+        */*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 lan_subnet() {
     local dev addr
     dev="$(ip -4 route show default 2>/dev/null | awk '/default/ {for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}')"
     if [ -n "$dev" ]; then
         addr="$(ip -4 -o addr show dev "$dev" scope global 2>/dev/null | awk '{print $4}' | head -1)"
         if [ -n "$addr" ]; then
-            echo "${addr%/*}" | awk -F. '{printf "%s.%s.%s.0/24\n",$1,$2,$3}'
-            return 0
+            local derived
+            derived="$(echo "${addr%/*}" | awk -F. '{printf "%s.%s.%s.0/24",$1,$2,$3}')"
+            if _valid_subnet "$derived"; then
+                echo "$derived"
+                return 0
+            fi
+            echo "souran-firewall: derived subnet '$derived' is invalid" >&2
         fi
     fi
-    echo "${SOURAN_FALLBACK_LAN:-192.168.1.0/24}"
+    local fb="${SOURAN_FALLBACK_LAN:-192.168.1.0/24}"
+    if _valid_subnet "$fb"; then
+        echo "$fb"
+        return 0
+    fi
+    # Refuse rather than emit something that parses into an over-permissive
+    # rule. Failing loudly beats loading the wrong policy.
+    echo "souran-firewall: no usable LAN subnet; refusing" >&2
+    return 1
 }
 
 render_ruleset() {
     # Substitute $LAN into a temp copy; never edit the tracked file, so the
     # derived value is not baked into version control.
+    #
+    # The caller OWNS the returned file and must remove it. This leaked
+    # one root-owned copy per invocation with no trap and no rm anywhere
+    # in the script -- measured 5 orphans on the live host, growing
+    # without bound on every load/reload/test.
     local lan tmp
     lan="$(lan_subnet)"
     tmp="$(mktemp /tmp/souran-nft.XXXXXX.nft)"
     sed "s|\$LAN|$lan|g" "$NFT_CONF" > "$tmp"
+    chmod 600 "$tmp"
     echo "$tmp"
 }
 
@@ -121,10 +154,39 @@ cmd_load() {
 }
 
 cmd_reload() {
+    # VALIDATE FIRST, DELETE SECOND. The order is the safety property.
+    #
+    # The previous version deleted the table and then loaded, so an invalid
+    # ruleset -- a malformed or empty $LAN, for instance -- meant the delete
+    # had already succeeded and the load failed. That leaves NO
+    # souran_filter table, the input policy falls back to accept, and every
+    # service the ruleset documents as loopback-only (:11434 Ollama, :8118
+    # privoxy, :9192 sidecar) becomes reachable from the LAN.
+    #
+    # Render, `nft --check`, and only then replace. A failed check leaves
+    # the live table untouched and still filtering.
+    local rendered
+    rendered="$(render_ruleset)"
+    if ! nft --check --file "$rendered" >/dev/null 2>&1; then
+        echo "souran firewall: REFUSING to load an invalid ruleset." >&2
+        echo "  the live table is unchanged and still filtering." >&2
+        nft --check --file "$rendered" 2>&1 | sed 's/^/  /' >&2 || true
+        rm -f "$rendered"
+        return 1
+    fi
+
     # Delete only OUR table. `nft flush ruleset` would take Docker's NAT
     # rules with it and silently break container networking.
     nft delete table inet "$TABLE" 2>/dev/null || true
-    nft --file "$(render_ruleset)"
+    if ! nft --file "$rendered"; then
+        # Unreachable after --check passed, but if the kernel still refuses,
+        # restore rather than leave the host with no filter at all.
+        echo "souran firewall: load failed after delete; restoring." >&2
+        rm -f "$rendered"
+        cmd_load
+        return 1
+    fi
+    rm -f "$rendered"
     publish_state
     echo "souran firewall reloaded"
 }
