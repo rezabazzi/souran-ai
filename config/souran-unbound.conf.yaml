@@ -78,7 +78,9 @@ server:
     key-cache-size: 32m
     neg-cache-size: 32m
     infra-cache-numhosts: 100000
-    cache-max-ttl: 86400
+    # Was 86400 (24 h). Far beyond useful on a censored link: answers
+    # change, and stale data is actively harmful rather than merely old.
+    cache-max-ttl: 3600
     cache-min-ttl: 30
     # A transient SERVFAIL must not be cached for half an hour.
     #
@@ -93,20 +95,43 @@ server:
     serve-expired-ttl: 86400
     serve-expired-reply-ttl: 300
     serve-expired-ttl-reset: yes
-    jostle-timeout: 200
+    # Was 200 ms, which is BELOW the measured mean RTT to a root server
+    # (142-204 ms). A jostled query therefore waited less than one
+    # authority round-trip, so jostling could only ever hurt: it gave up
+    # on the server before the server had a chance to answer. The man
+    # page frames this as "one roundtrip to the authority servers".
+    jostle-timeout: 2000
     infra-host-ttl: 900
     rrset-cache-slabs: 4
     so-reuseport: yes
-    unwanted-reply-threshold: 10000000
-
-    # ---- poison / injection resistance --------------------------------
-    # Force TCP for ALL upstream (authoritative) queries. Plain UDP/53
-    # responses are trivially forged on this network: telegram.org was
-    # observed resolving to 10.10.34.36 (a private, unroutable address)
-    # instead of its real 149.154.167.99. TCP is not spoofable in
-    # flight, so every answer now comes from the real authority.
-    # Cost: more packets/slightly higher latency on a lossy link; this
-    # is the correct trade for poison-proof resolution.
+    unwanted-reply-threshold: 10000000    # TCP upstream: KEPT, but the comment it used to carry was FALSE.
+    #
+    # It claimed "the correct trade for poison-proof resolution". Measured
+    # on this link, TCP/53 responses are STILL forged:
+    #
+    #   tier-1 :5399 over TCP, telegram.org -> rcode=0 ['10.10.34.36']
+    #   tier-1 :5399 over TCP, twitter.com  -> rcode=0 ['10.10.34.36']
+    #   tier-1 :5399 over TCP, wikipedia.org -> 185.15.59.224  (correct)
+    #
+    # And these are well-formed, correctly length-prefixed TCP responses
+    # from unbound -- so RFC 7766's length prefix is not being defeated by
+    # a naive injector rewriting bytes in flight. Something is terminating
+    # TCP/53 and re-originating the query, or intercepting at the
+    # authority-facing path. That mechanism is still unidentified;
+    # capturing on that path would pin it down.
+    #
+    # So TCP upstream is NOT poison-proof here and must not be relied on
+    # as such. It is kept because it is still correct on the merits: a
+    # well-formed TCP exchange is more authenticatable than UDP, and it
+    # costs little on a link that mostly resolves anyway. But the actual
+    # defences against injection on this network are:
+    #
+    #   1. the front-end's private-address filter (is_poison), which
+    #      catches 10.10.34.36 for RFC1918/loopback answers, and
+    #   2. escalation to DoH over 443, which is the only clean transport.
+    #
+    # Both are load-bearing. Neither is redundant, and a future change that
+    # assumes TCP alone suffices would reintroduce injection.
     tcp-upstream: yes
 
     harden-dnssec-stripped: yes
@@ -137,7 +162,13 @@ server:
     edns-buffer-size: 1232
     max-udp-size: 1232
     edns-tcp-keepalive: yes
-    unknown-server-time-limit: 500
+    # Measured RTT to the root servers from this host: 84 / 142 / 204 ms
+    # average, 214 ms max, with visible jitter. The previous 500 ms limit
+    # therefore aborted legitimate queries mid-flight on a path that
+    # routinely needs 500-1800 ms end to end. The man page suggests
+    # ~1128 "behind a slow satellite link"; 1800 is ~9x the mean RTT and
+    # comfortably covers the observed max.
+    unknown-server-time-limit: 1800
 
 access-control: 0.0.0.0/0 allow
 access-control: ::/0 allow

@@ -1,33 +1,22 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-10-05T01:19:16.072352+00:00",
+  "updated_at": "2026-10-05T01:25:21.623651+00:00",
   "uptime_seconds": 0,
-  "cycles": 1914,
+  "cycles": 1925,
   "resolution": {
-    "total_queries": 1914,
-    "tier1_hits": 6,
-    "tier2_hits": 1,
-    "poison_blocked": 1,
-    "failures": 0,
+    "total_queries": 1925,
+    "tier1_hits": 27,
+    "tier2_hits": 22,
+    "poison_blocked": 14,
+    "failures": 2,
     "latencies_ms": [],
     "top_domains": {}
   },
   "doh_endpoints": {
     "https://cloudflare-dns.com/dns-query": {
-      "success": 1740,
+      "success": 1751,
       "fail": 220,
       "latency_ms": [
-        3530.3,
-        1673.2,
-        6815.6,
-        725.6,
-        6730.8,
-        837.6,
-        767.2,
-        846.9,
-        3314.1,
-        771.3,
-        1615.6,
         766.0,
         4602.7,
         1421.8,
@@ -216,24 +205,24 @@
         1585.7,
         4243.3,
         1457.3,
-        1156.4
+        1156.4,
+        1190.8,
+        5837.8,
+        1276.0,
+        1042.5,
+        3215.3,
+        1349.6,
+        2488.8,
+        1284.3,
+        1970.5,
+        907.4,
+        800.5
       ]
     },
     "https://dns.google/resolve": {
-      "success": 1818,
+      "success": 1829,
       "fail": 142,
       "latency_ms": [
-        640.0,
-        777.0,
-        727.9,
-        665.1,
-        866.7,
-        891.0,
-        1331.6,
-        735.0,
-        733.5,
-        1740.1,
-        2291.0,
         2295.3,
         1032.7,
         1170.8,
@@ -422,33 +411,33 @@
         1143.7,
         2675.0,
         1351.9,
-        1278.3
+        1278.3,
+        1345.7,
+        1258.1,
+        1218.4,
+        1256.2,
+        1364.9,
+        1318.2,
+        1294.3,
+        1396.0,
+        926.0,
+        992.2,
+        944.4
       ]
     }
   },
   "doh_best_endpoint": "https://dns.google/resolve",
   "censorship": {
-    "poisoned_answers": 1,
+    "poisoned_answers": 14,
     "censored_names_blocked": [],
     "first_seen": {},
     "blocked_by_tier": {
       "tier1": 0,
-      "tier2": 1219
+      "tier2": 1230
     }
   },
   "cache": {
     "hit_rate_history": [
-      0.25,
-      0.25,
-      0.182,
-      0.167,
-      0.0,
-      0.125,
-      0.111,
-      0.182,
-      0.182,
-      0.0,
-      0.0,
       0.0,
       0.0,
       0.0,
@@ -537,7 +526,18 @@
       0.2,
       0.2,
       0.125,
-      0.5
+      0.5,
+      0.2,
+      0.2,
+      0.167,
+      0.167,
+      0.0,
+      0.0,
+      0.143,
+      0.333,
+      0.333,
+      0.0,
+      0.0
     ],
     "recommended_ttl": 600,
     "prefetch_candidates": []
