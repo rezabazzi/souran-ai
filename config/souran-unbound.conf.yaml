@@ -173,8 +173,23 @@ server:
 access-control: 0.0.0.0/0 allow
 access-control: ::/0 allow
 
+include: "/opt/souran-ai/config/blocklists/blocklist.conf"
+
 remote-control:
     control-enable: yes
     control-interface: 127.0.0.1
     control-port: 8953
     control-use-cert: no
+
+# ---- ad/tracker blocking (added v5.1.0) ----------------------------
+# 400k+ domains compiled by souran_blocklists.py into
+# config/blocklists/blocklist.conf, pulled in here.
+#
+# A top-level include:, NOT an auth-zone stanza: local-data is not valid
+# under auth-zone, and putting it there crashed the resolver rather than
+# blocking anything.
+#
+# Regenerate with:
+#     sudo /opt/souran-ai/souran_blocklists.py compile --force
+# Check what is loaded with:
+#     souran_blocklists.py status

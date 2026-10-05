@@ -61,6 +61,22 @@ VALID_STATES = ("on", "off")
 
 FEATURES = {
     # ---------------- DNS core ----------------
+    "ad_blocklists": dict(
+        category="dns",
+        label="Ad/Tracker/Malware Blocking (426k domains)",
+        description=("Compiles the cached hosts/adblock/bare-format lists "
+                     "into unbound local-zone + local-data rules and "
+                     "answers 0.0.0.0. Also suppresses the censor's "
+                     "injected adservice.google.com answer. Regenerate "
+                     "with souran_blocklists.py compile --force."),
+        units=[("souran-dns", "reload", "reload")],
+        requires=["dns_recursive"],
+        # Probe the RULESET, not the unit: the unit stays active whether
+        # or not blocking is loaded, so probing the unit would report
+        # this feature as on when it does nothing.
+        probe="(blocklist_loaded() and unit_active('souran-dns'), "
+               "'blocklist in unbound config')",
+    ),
     "dns_recursive": dict(
         category="dns",
         label="Zero-Upstream Recursive DNS",
@@ -389,6 +405,21 @@ def _run(cmd, timeout=8):
         return 1, "", str(exc)
 
 
+def blocklist_loaded():
+    """Is the compiled blocklist actually included in the live config?
+
+    Presence of the generated file is NOT enough: the file existed while
+    the config still pointed nowhere, and while an invalid stanza crashed
+    the resolver outright. This checks the thing that matters -- that the
+    running config references it.
+    """
+    try:
+        with open("/opt/souran-ai/config/souran-unbound.conf.yaml") as fh:
+            return "config/blocklists/blocklist.conf" in fh.read()
+    except OSError:
+        return False
+
+
 def unit_active(unit: str) -> bool:
     """Is a systemd unit active?
 
@@ -550,6 +581,11 @@ def web3_rpc_ok() -> bool:
 
 PROBE_SCOPE = {
     "unit_active": unit_active,
+    # Probes are eval'd against THIS dict only -- the module globals are
+    # not in scope. Adding a probe helper without registering it here
+    # fails as "name 'x' is not defined", which the registry surfaces
+    # honestly rather than silently reporting the feature as off.
+    "blocklist_loaded": blocklist_loaded,
     "tcp_open": tcp_open,
     "read_cfg": read_cfg,
     "nat_dns_redirect_present": nat_dns_redirect_present,
