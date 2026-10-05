@@ -96,7 +96,14 @@ table inet souran_filter {
         # whole rules, so the port set is defined separately and the
         # rule is written out. Keeping it explicit also makes `nft list`
         # readable without cross-referencing a macro.
-        tcp dport { 22, 53, 853, 8082, 8083, 8383 } ip saddr 10.103.26.0/24 accept comment "souran: LAN services"
+        # Port 54 is the resolver's health endpoint (LISTEN_PORT + 1).
+        #
+        # It was MISSING from the allowlist, so `policy drop` blocked it
+        # while BOTH dashboards queried it. Every health verdict derived
+        # from it was therefore meaningless -- and it failed silently,
+        # which is the worst way for a health check to fail. A health
+        # endpoint must be reachable by the very thing that reports it.
+        tcp dport { 22, 53, 54, 853, 8082, 8083, 8383 } ip saddr 10.103.26.0/24 accept comment "souran: LAN services"
         udp dport 53 ip saddr 10.103.26.0/24 accept comment "souran: DNS udp from LAN"
 
         # NO blanket "admin ports, any source" rule.

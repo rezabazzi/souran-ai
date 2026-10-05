@@ -47,8 +47,12 @@ HOST_IP = "10.103.26.254"
 NS_IP = "10.103.26.253"
 SUBNET = "10.103.26.0/24"
 
-BLOCKED = [11434, 8118, 8080, 8090, 8388, 54, 9192, 8084, 8085, 8086, 8087]
-ALLOWED = [53, 8082, 8383, 22]
+# 54 is deliberately NOT here: it is the resolver's health endpoint,
+# queried by both dashboards. It was in this list until an adversarial
+# review pointed out that blocking it made every health verdict
+# meaningless -- silently, which is the worst way to fail.
+BLOCKED = [11434, 8118, 8080, 8090, 8388, 9192, 8084, 8085, 8086, 8087]
+ALLOWED = [53, 54, 8082, 8383, 22]
 
 # The namespace this test builds lives on 10.99.99.0/24. The firewall
 # allows the LAN service set ONLY from the real LAN subnet, so this test

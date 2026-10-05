@@ -156,6 +156,9 @@ _rr_lock = threading.Lock()
 _inflight = {}
 _inflight_lock = threading.Lock()
 _negcache = {}
+# Bound the negative cache so attacker-chosen failing names cannot
+# grow it without limit. See the pruning at the point of insertion.
+NEGCACHE_MAX = 4096
 NEG_TTL = 5.0
 
 # Ranges that must never be a legitimate answer for a public name on a
@@ -944,6 +947,24 @@ def resolve(qname: str, qtype: int = 1):
         if not result[0]:
             with _inflight_lock:
                 _negcache[key] = time.time() + NEG_TTL
+                # _negcache was written and read but NEVER PRUNED, while
+                # _cache has a 4096 cap. On a link where lookups fail --
+                # DoH throttled, an authority unreachable -- every distinct
+                # failing name added an entry that lived forever. Memory
+                # grows without bound from attacker-chosen names, which is
+                # an easy way to turn a DNS failure into an OOM.
+                #
+                # Two cheap bounds: drop expired entries, and cap the size.
+                # Both run under the lock already held for _inflight.
+                if len(_negcache) > NEGCACHE_MAX:
+                    now = time.time()
+                    for k in [k for k, exp in _negcache.items() if exp <= now]:
+                        _negcache.pop(k, None)
+                    # Still oversized means everything is live; evict the
+                    # oldest so the dict cannot outgrow its cap.
+                    while len(_negcache) > NEGCACHE_MAX:
+                        _negcache.pop(min(_negcache, key=_negcache.get),
+                                      None)
         return result
     finally:
         with _inflight_lock:
