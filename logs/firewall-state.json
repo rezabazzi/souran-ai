@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-10-05T16:05:32+01:00",
+  "updated_at": "2026-10-05T16:45:07+01:00",
   "souran_filter_loaded": true,
   "outbound_dns_to_tor": true,
   "source": "souran-firewall.sh"

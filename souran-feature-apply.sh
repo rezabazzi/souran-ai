@@ -178,6 +178,8 @@ ruleset_include() {
 # ---- config-backed features --------------------------------------------
 apply_config() {
     local conf=/opt/souran-ai/config/souran-unbound.conf.yaml
+    local conf_before conf_after
+    conf_before="$(cksum "$conf" 2>/dev/null | awk '{print $1"-"$2}')"
     case "${FEATURE}:${ACTION}" in
         dns_dnssec:enable)
             sed -i 's/^\( *\)val-permissive-mode: .*/\1val-permissive-mode: no/' "$conf" ;;
@@ -200,18 +202,19 @@ apply_config() {
                 "SOURAN_DOH_URL=https://cloudflare-dns.com/dns-query" \
                 "SOURAN_DOH_URL2=https://dns.google/resolve" ;;
         dns_doh_tier:disable)
+            APPLIED_CONF=1
             setenv_dropin souran-doh-fallback "SOURAN_DOH_URL=" "SOURAN_DOH_URL2=" ;;
 
         # --- the two ruleset features ----------------------------------
         ad_blocklists:disable)
             ruleset_include "blocklist.conf" no ;;
         ad_blocklists:enable)
-            ruleset_include "blocklist.conf" yes
+            APPLIED_CONF=1; ruleset_include "blocklist.conf" yes
             /opt/souran-ai/souran_blocklists.py compile >/dev/null 2>&1 || return 1 ;;
         lan_names:disable)
             ruleset_include "lan.conf" no ;;
         lan_names:enable)
-            ruleset_include "lan.conf" yes
+            APPLIED_CONF=1; ruleset_include "lan.conf" yes
             /opt/souran-ai/souran_lan.py compile >/dev/null 2>&1 || return 1 ;;
 
 
@@ -250,9 +253,56 @@ apply_config() {
             echo "       to report success for an action that does nothing." >&2
             return 1 ;;
     esac
+    # A `sed` that matches NOTHING exits 0. If the YAML key were ever
+    # renamed or reindented, the file would be untouched, the reload
+    # irrelevant, and the script would still print "ok" -- the residual form
+    # of the false-success bug this work exists to eliminate. So compare the
+    # checksum before and after.
+    #
+    # Skipped for handlers that do not go through sed (the ruleset include,
+    # the systemd drop-in); they set APPLIED_CONF=1 themselves.
+    conf_after="$(cksum "$conf" 2>/dev/null | awk '{print $1"-"$2}')"
+    if [ "${APPLIED_CONF:-0}" != "1" ] && [ "$conf_before" = "$conf_after" ]; then
+        # An unchanged file means one of two things needing opposite answers:
+        #   * the requested value is ALREADY in place -> success, no-op
+        #   * the key does not exist at all           -> failure
+        # Reporting the first as an error would make the control plane cry
+        # wolf on every idempotent re-enable.
+        local key want probe_line
+        case "${FEATURE}" in
+            dns_dnssec)         key="val-permissive-mode"
+                               if [ "$ACTION" = enable ]; then want="no"; else want="yes"; fi ;;
+            dns_tcp_upstream)    key="tcp-upstream"
+                               if [ "$ACTION" = enable ]; then want="yes"; else want="no"; fi ;;
+            dns_cache_prefetch) key="prefetch"
+                               if [ "$ACTION" = enable ]; then want="yes"; else want="no"; fi ;;
+            *) key=""; want="" ;;
+        esac
+        if [ -n "$key" ] && grep -qE "^[[:space:]]*${key}:" "$conf"; then
+            probe_line="$(grep -m1 -E "^[[:space:]]*${key}:" "$conf")"
+            if echo "$probe_line" | grep -qE "^[[:space:]]*${key}:[[:space:]]*${want}"; then
+                log CONFIG "feature=${FEATURE} action=${ACTION} already in place"
+                return 0
+            fi
+            echo "error: ${key} is not '${want}' and the rewrite did not take." >&2
+            return 1
+        fi
+        echo "error: ${FEATURE} ${ACTION} did not change ${conf} -- key" >&2
+        echo "       '${key:-unknown}' not found, so nothing was applied." >&2
+        return 1
+    fi
+
+    # Never hand the resolver a config that does not parse.
+    if ! /opt/souran-ai/engine/unbound/sbin/unbound-checkconf "$conf" >/dev/null 2>&1; then
+        echo "error: ${conf} does not validate after the edit; refusing to" >&2
+        echo "       reload it." >&2
+        return 1
+    fi
+
     log CONFIG "feature=${FEATURE} action=${ACTION} file=${conf}"
     systemctl reload souran-dns >/dev/null 2>&1 || \
         systemctl restart souran-dns >/dev/null 2>&1 || true
+    return 0
 }
 
 # ---- main ---------------------------------------------------------------
