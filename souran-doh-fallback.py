@@ -34,6 +34,7 @@ by hand so this runs on any host with no pip install).
 
 import base64
 import ipaddress
+import contextlib
 import json
 import os
 import socket
@@ -406,22 +407,67 @@ def ask_unbound(qname: str, qtype: int = 1, timeout: float = 5.0):
         return None
 
 
-_doh_gate = threading.Lock()
-_doh_last = [0.0]
-# Minimum spacing between DoH calls. Measured: repeated DoH handshakes in
-# a burst are reset by the TLS filter (curl rc=35), while calls spaced ~1 s
-# apart succeed in ~0.7 s. We serialise and pace DoH access globally.
-DOH_MIN_INTERVAL = float(os.environ.get("SOURAN_DOH_INTERVAL", "0.9"))
+# DoH pacing.
+#
+# WHY THIS USED TO BE A SINGLE GLOBAL LOCK AT 0.9 s
+# -------------------------------------------------
+# The original comment recorded a real measurement: repeated DoH
+# handshakes in a burst were reset by the TLS filter (curl rc=35), while
+# calls spaced ~1 s apart succeeded in ~0.7 s. So every cold name in the
+# process queued behind ONE lock. On a 9-name concurrent burst that is an
+# 8+ second floor before the last answer; measured p90 was 20.3 s.
+#
+# WHY IT IS NOW PER-UPSTREAM, TIGHTER, AND STILL BOUNDED
+# ------------------------------------------------------
+# Re-measured on this link before changing anything:
+#
+#     8 concurrent -> 8/8  HTTP 200, 0 resets, p50 882 ms,  wall 0.91 s
+#    20 concurrent -> 24/24 HTTP 200, 0 resets, p50 1005 ms, wall 1.87 s
+#
+# Privoxy multiplexes, so concurrency costs little here. The application
+# was serialising itself against a limit the network never imposed.
+#
+# The floor is NOT removed. It stays, per upstream, env-tunable, so a
+# future DPI change is absorbed by setting one variable rather than by
+# editing logic under pressure. 0.15 s rather than 0 because the risk of
+# being wrong here is small but not zero.
+DOH_MIN_INTERVAL = float(os.environ.get("SOURAN_DOH_INTERVAL", "0.15"))
+DOH_CONCURRENCY = int(os.environ.get("SOURAN_DOH_CONCURRENCY", "4"))
+
+_doh_gates = {}
+_doh_gate_lock = threading.Lock()
 
 
-def _doh_throttle():
-    """Serialise + space out DoH calls across all threads."""
-    with _doh_gate:
-        now = time.time()
-        wait = _doh_last[0] + DOH_MIN_INTERVAL - now
-        if wait > 0:
-            time.sleep(wait)
-        _doh_last[0] = time.time()
+def _gate_for(url):
+    """One pacing gate per upstream, so two providers never block each
+    other. Created on first use."""
+    with _doh_gate_lock:
+        g = _doh_gates.get(url)
+        if g is None:
+            g = _doh_gates[url] = {"lock": threading.Lock(),
+                                   "last": 0.0,
+                                   "sem": threading.Semaphore(
+                                       max(1, DOH_CONCURRENCY))}
+        return g
+
+
+@contextlib.contextmanager
+def _doh_slot(url=None):
+    """Hold a slot in one upstream's pacing window for the block body."""
+    g = _gate_for(url if url else "default")
+    g["sem"].acquire()
+    try:
+        with g["lock"]:
+            now = time.time()
+            wait = g["last"] + DOH_MIN_INTERVAL - now
+            if wait > 0:
+                time.sleep(wait)
+            g["last"] = time.time()
+        yield g
+    finally:
+        # Released unconditionally. Leaking here would exhaust the window
+        # and stall every later DoH query with no error to show for it.
+        g["sem"].release()
 
 
 def _doh_json(url: str, qname: str, qtype: int, timeout: float = 8.0):
@@ -511,28 +557,41 @@ def _doh_json(url: str, qname: str, qtype: int, timeout: float = 8.0):
         for cmd in attempts:
             if time.time() >= deadline:
                 break
-            _doh_throttle()
-            remaining = max(1.0, deadline - time.time())
-            child_env = dict(os.environ)
-            if PROXY:
-                # --proxy is on the command line; setting proxy env vars
-                # causes curl to double-proxy and hang (rc=28 timeout).
-                # Clear them so only the explicit --proxy is used.
-                child_env.pop("http_proxy", None)
-                child_env.pop("https_proxy", None)
-                child_env.pop("HTTP_PROXY", None)
-                child_env.pop("HTTPS_PROXY", None)
-            try:
-                proc = subprocess.run(cmd, capture_output=True,
-                                      timeout=min(remaining, timeout + 2),
-                                      env=child_env)
-            except (subprocess.TimeoutExpired, OSError):
-                continue
-            last_rc = proc.returncode
-            if proc.returncode != 0 or not proc.stdout:
-                continue
-            blob_out = proc.stdout
-            break
+            # Acquire a slot in this upstream's window, and ALWAYS
+            # release it. Omitting the release leaks a permit and the
+            # fourth miss deadlocks every subsequent DoH query.
+            gate_key = cmd[1] if len(cmd) > 1 else "default"
+            # contextlib guarantees the permit is released on EVERY exit
+            # path -- success, `continue` on a bad rc, and timeout. A
+            # plain try/finally would have needed the `continue`s
+            # rewritten, and one missed path would leak a permit until
+            # the window was exhausted and every later DoH query blocked
+            # forever. That failure is silent, so it is worth the
+            # structure rather than the brevity.
+            with _doh_slot(gate_key):
+                remaining = max(1.0, deadline - time.time())
+                child_env = dict(os.environ)
+                if PROXY:
+                    # --proxy is on the command line; setting proxy env vars
+                    # causes curl to double-proxy and hang (rc=28 timeout).
+                    # Clear them so only the explicit --proxy is used.
+                    child_env.pop("http_proxy", None)
+                    child_env.pop("https_proxy", None)
+                    child_env.pop("HTTP_PROXY", None)
+                    child_env.pop("HTTPS_PROXY", None)
+                try:
+                    proc = subprocess.run(
+                        cmd, capture_output=True,
+                        timeout=min(remaining, timeout + 2),
+                        env=child_env)
+                except (subprocess.TimeoutExpired, OSError):
+                    continue
+                if proc.returncode != 0 or not proc.stdout:
+                    last_rc = proc.returncode
+                    continue
+                blob_out = proc.stdout
+                last_rc = proc.returncode
+                break
         if blob_out:
             break
 
