@@ -313,6 +313,7 @@ FEATURES = {
         units=[],
         requires=[],
         default="off",   # container exists but has been stopped for weeks
+        config_toggle=True,   # starts/stops the existing container
         probe="(ouinet_present(), 'installed' if ouinet_present() else 'not running')",
     ),
     "alt_veltor": dict(

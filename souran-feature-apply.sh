@@ -90,7 +90,7 @@ units_for() {
         dns_cache_prefetch)   echo "" ;;
         dns_doh_tier)         echo "" ;;
         censor_outbound_dns)  echo "" ;;
-        web3_rpc)             echo "" ;;
+        web3_rpc)             echo "souran-web3-resolver" ;;
         dns_dnssec_tor_note)  echo "" ;;
         # No unit on purpose: these act on a generated RULESET and must
         # end with a reload of souran-dns. Mapping them to the unit
@@ -102,6 +102,7 @@ units_for() {
         # Optional projects: no unit, so they reach apply_config,
         # which refuses them explicitly as not-installed.
         alt_ouinet)           echo "" ;;
+        alt_veltor)           echo "" ;;
         alt_veltor)           echo "" ;;
         proxy_xray)           echo "xray" ;;
         proxy_hysteria)        echo "hysteria" ;;
@@ -136,24 +137,6 @@ setenv_dropin() {
 }
 
 # JSON flag in the sidecar's own state file.
-set_api_flag() {
-    local key="$1" val="$2"
-    local f=/opt/souran-ai/logs/api-flags.json
-    [ -f "$f" ] || echo "{}" > "$f"
-    python3 - "$f" "$key" "$val" <<'PY' || return 1
-import json, sys
-path, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    with open(path) as fh:
-        data = json.load(fh)
-except (OSError, ValueError):
-    data = {}
-data[key] = val == "true"
-with open(path, "w") as fh:
-    json.dump(data, fh, indent=2)
-PY
-}
-
 # Enable/disable a generated ruleset by commenting its `include:` line.
 #
 # NOT by deleting the file. The config `include:`s the ruleset, so
@@ -231,16 +214,26 @@ apply_config() {
             ruleset_include "lan.conf" yes
             /opt/souran-ai/souran_lan.py compile >/dev/null 2>&1 || return 1 ;;
 
-        # --- blockchain RPC gateway ------------------------------------
-        web3_rpc:enable)  set_api_flag rpcGatewayEnabled true  ;;
-        web3_rpc:disable) set_api_flag rpcGatewayEnabled false ;;
 
-        # --- features that are NOT installed on this host --------------
-        # Enabling software that is absent would be a claim about
-        # something that is not there. Refuse explicitly.
-        alt_ouinet:*|alt_veltor:*)
-            echo "error: ${FEATURE} is not installed on this host; install it" >&2
-            echo "       first, then the toggle becomes meaningful." >&2
+        # --- Ouinet / CENO ---------------------------------------------
+        # The container EXISTS on this host (equalitie/ouinet) but has
+        # been `Exited (0)` for two weeks, so a previous version refused
+        # with "not installed" -- which was wrong: it is installed and
+        # stopped. Enabling starts the existing container; disabling stops
+        # it. Neither pulls an image or creates anything.
+        alt_ouinet:enable)
+            docker start ouinet >/dev/null 2>&1 || {
+                echo "error: could not start the ouinet container" >&2; return 1; } ;;
+        alt_ouinet:disable)
+            docker stop ouinet >/dev/null 2>&1 || {
+                echo "error: could not stop the ouinet container" >&2; return 1; } ;;
+
+        # --- Veltor -----------------------------------------------------
+        # Genuinely absent: no binary, no /opt/veltor, no unit. Refusing
+        # is the honest answer rather than reporting a success.
+        alt_veltor:*)
+            echo "error: alt_veltor is not installed on this host (no" >&2
+            echo "       binary, no /opt/veltor, no unit). Install it first." >&2
             return 1 ;;
 
         # --- an informational note, not a capability -------------------
