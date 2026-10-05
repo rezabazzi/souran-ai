@@ -24,7 +24,7 @@ from datetime import datetime
 
 sys.path.insert(0, "/opt/souran-ai")
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Body
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 import souran_telemetry as tel
@@ -318,55 +318,199 @@ async def api_rrtypes(name: str = Query("google.com"),
 # ---------------------------------------------------------------------------
 @app.get("/api/toggles")
 async def api_toggles():
-    """Get current feature toggle state."""
-    try:
-        r = subprocess.run(["python3", "/opt/souran-ai/souran-toggle.py", "status"],
-                           capture_output=True, text=True, timeout=10)
-        if r.returncode == 0:
-            return JSONResponse(json.loads(r.stdout))
-    except Exception as e:
-        pass
-    return JSONResponse({"error": str(e)}, status_code=500)
+    """RETIRED -- returns the registry's summary.
+
+    Used to shell out to souran-toggle.py and return the 12-key legacy
+    store. That store and souran_features.py describe the same 31
+    capabilities under different names, so they could never agree.
+    """
+    return await _sidecar("GET", "/api/features/summary/categories",
+                          timeout=45)
 
 
 @app.post("/api/toggle/{feature}")
 async def api_toggle(feature: str, enabled: bool = Query(..., alias="enabled"), request: Request = None):
-    """Toggle a single feature on/off."""
+    """RETIRED -- delegates to the feature registry.
+
+    This used to write a second, competing toggle store via
+    souran-toggle.py (12 legacy keys in data/toggles.json) that shared no
+    state with souran_features.py's 31 features. Two stores for the same
+    concept drift by construction: the legacy key "dns" and the registry
+    id "dns_recursive" are the same unit under different names.
+
+    It also shelled out with `sudo -S`, which reads a password from stdin
+    where nothing supplied one -- so the escalation could only ever fail.
+
+    Kept as a route so an already-open page gets a clear message instead
+    of a 404, and it delegates rather than maintaining its own state.
+    """
     client = request.client.host if request else ""
     if client not in ("127.0.0.1", "::1"):
         raise HTTPException(403, "loopback only")
-    try:
-        r = subprocess.run(
-            ["python3", "/opt/souran-ai/souran-toggle.py", "set", feature,
-             "true" if enabled else "false"],
-            capture_output=True, text=True, timeout=15)
-        if r.returncode == 0:
-            result = json.loads(r.stdout)
-            _record("Toggle", f"{feature} -> {enabled}", True)
-            return JSONResponse(result)
-        return JSONResponse({"error": r.stderr.strip()}, status_code=500)
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
+    return await _sidecar(
+        "POST", f"/api/features/{feature}",
+        {"state": "on" if enabled else "off"}, timeout=90)
 
 @app.post("/api/toggles")
 async def api_toggles_all(enabled: bool = Query(..., alias="enabled"), request: Request = None):
-    """Toggle all features on/off."""
-    client = request.client.host if request else ""
-    if client not in ("127.0.0.1", "::1"):
-        raise HTTPException(403, "loopback only")
+    """RETIRED -- "all on/off" now walks the registry.
+
+    The legacy implementation restarted every Souran unit at once,
+    including BOTH dashboards -- so pressing "all on" killed the UI that
+    sent the request mid-flight and returned nothing.
+
+    Now each feature goes through the registry's intent queue, one at a
+    time, and the response reports per-feature results including any that
+    did not take. A bulk action that reports its own failures is useful;
+    one that silently drops the response is not.
+    """
+    _loopback(request)
+    state = "on" if enabled else "off"
+
+    import urllib.request as _ur
+    opener = _ur.build_opener(_ur.ProxyHandler({}))
     try:
-        r = subprocess.run(
-            ["python3", "/opt/souran-ai/souran-toggle.py",
-             "all", "true" if enabled else "false"],
-            capture_output=True, text=True, timeout=30)
-        if r.returncode == 0:
-            result = json.loads(r.stdout)
-            _record("Toggle all", f"all -> {enabled}", True)
-            return JSONResponse(result)
-        return JSONResponse({"error": r.stderr.strip()}, status_code=500)
+        with opener.open(SIDECAR + "/api/features/summary/categories",
+                         timeout=45) as r:
+            doc = json.loads(r.read().decode())
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"[:300]},
+                            status_code=502)
+
+    done, failed = [], []
+    for cat in (doc.get("categories") or {}).values():
+        for f in cat:
+            # Informational features have no actuator; asking is pointless.
+            if not f.get("controllable"):
+                continue
+            try:
+                req = _ur.Request(
+                    f"{SIDECAR}/api/features/{f['id']}",
+                    data=json.dumps({"state": state}).encode(),
+                    method="POST",
+                    headers={"Content-Type": "application/json"})
+                with opener.open(req, timeout=90) as r:
+                    res = json.loads(r.read().decode())
+                (done if res.get("ok") else failed).append(f["id"])
+            except Exception as e:
+                failed.append(f"{f['id']} ({type(e).__name__})")
+
+    _record("Toggle all", f"{state}: {len(done)} ok, {len(failed)} failed",
+            not failed)
+    return JSONResponse({"state": state, "ok": len(failed) == 0,
+                         "applied": done, "failed": failed})
+
+
+# =========================================================================
+#  FEATURE REGISTRY PASSTHROUGH
+# =========================================================================
+# 8383 was showing a SECOND, COMPETING toggle store: souran-toggle.py,
+# a legacy 12-key file (dns, dot, doh, tor, web3, gaming, censorship,
+# learning, anticompress, dashboard, neuro, watchdog) in
+# data/toggles.json. It never touched :9192 or souran_features.py.
+#
+# Two stores for the same concept cannot both be right: souran-toggle.py
+# "dns" and registry "dns_recursive" are the same unit under different
+# names, so they drift by construction. Worse, the legacy path shelled out
+# with `sudo -S` -- which reads the password from stdin, where nothing
+# supplied one, so the call could only ever fail.
+#
+# The registry (31 features, desired-vs-probed state, drift detection) is
+# the single source of truth and these routes are a thin passthrough to
+# it. No second store, no bypass of the intent queue, no `sudo -S`.
+SIDECAR = "http://127.0.0.1:9192"
+
+
+def _loopback(request: Request) -> None:
+    """Control actions are loopback-only."""
+    client = request.client.host if request and request.client else ""
+    if client not in ("127.0.0.1", "::1"):
+        raise HTTPException(403, "control actions are loopback-only")
+
+
+async def _sidecar(method: str, path: str, body=None, timeout: int = 20):
+    """Call the sidecar on loopback.
+
+    ProxyHandler({}) is mandatory, not optional: this service has
+    HTTP_PROXY=http://127.0.0.1:8118 injected, so urllib would otherwise
+    route loopback calls to :9192 through privoxy and they would fail.
+    """
+    import urllib.request
+    import urllib.error
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        SIDECAR + path, data=data, method=method,
+        headers={"Content-Type": "application/json"})
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            return JSONResponse(json.loads(r.read().decode()),
+                                status_code=r.status)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode()[:300]
+        if e.code == 409:
+            # An executor is already mid-flight for this feature. The
+            # intent is queued and WILL be applied, so this is not a
+            # failure -- reporting it as one makes a working toggle look
+            # broken. Tell the caller to re-read the probed state.
+            return JSONResponse({
+                "ok": None,
+                "queued": True,
+                "message": ("an executor is already running for this "
+                            "feature; the change is queued and will be "
+                            "applied within a few seconds"),
+                "detail": detail,
+            }, status_code=202)
+        return JSONResponse({"error": e.reason, "detail": detail},
+                            status_code=e.code)
+    except Exception as e:
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"[:300]},
+                            status_code=502)
+
+
+@app.get("/api/features")
+async def api_features():
+    """The authoritative feature registry, grouped by category."""
+    return await _sidecar("GET", "/api/features/summary/categories")
+
+
+@app.get("/api/features/{fid}")
+async def api_feature_detail(fid: str):
+    return await _sidecar("GET", f"/api/features/{fid}")
+
+
+@app.post("/api/features/{fid}")
+async def api_set_feature(fid: str, request: Request,
+                          body: dict = Body(default_factory=dict)):
+    """Switch one feature.
+
+    `ok` in the response means the request was accepted AND the probe
+    agrees -- not merely that the write succeeded. The UI must render the
+    button from `effective`, never from the click.
+    """
+    _loopback(request)
+    state = str(body.get("state", ""))
+    if state not in ("on", "off"):
+        return JSONResponse({"error": "state must be 'on' or 'off'"}, 400)
+    return await _sidecar("POST", f"/api/features/{fid}", {"state": state},
+                          timeout=90)
+
+
+@app.get("/api/portmap")
+async def api_portmap():
+    """Authoritative port inventory, replacing a hardcoded list.
+
+    The local table claimed tier-1 on :5399 was 'closed' while it was in
+    fact listening -- it is a static guess, not a measurement.
+    """
+    return await _sidecar("GET", "/api/ports", timeout=45)
+
+
+@app.get("/api/tech/status")
+async def api_tech_status():
+    """Technitium availability. It is normally NOT running; the UI must
+    show that plainly rather than rendering an empty zone table."""
+    return await _sidecar("GET", "/api/technitium/status")
 
 
 @app.get("/api/logs")

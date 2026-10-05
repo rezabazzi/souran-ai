@@ -52,10 +52,10 @@ def set_feature(name, enabled):
     # Apply immediately via systemd
     svc = FEATURES[name]["service"]
     if enabled:
-        subprocess.run(["sudo", "-S", "systemctl", "restart", svc],
+        subprocess.run(["sudo", "-n", "systemctl", "restart", svc],
                         timeout=10, capture_output=True)
     else:
-        subprocess.run(["sudo", "-S", "systemctl", "stop", svc],
+        subprocess.run(["sudo", "-n", "systemctl", "stop", svc],
                         timeout=10, capture_output=True)
     return {"feature": name, "enabled": state[name], "service": svc}
 
