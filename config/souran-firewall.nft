@@ -23,8 +23,8 @@
 #
 # TRUST MODEL
 # -----------
-# The host sits behind consumer NAT (10.103.26.86/24 on wlp2s0, gateway
-# 10.103.26.99), so it is not directly reachable from the internet. But
+# The host sits behind consumer NAT (see $LAN below for the current
+# address; gateway is assigned by DHCP), so it is not directly reachable
 # NAT is not access control: every device on the cafe Wi-Fi, and anything
 # that reaches a service through the Cloudflare tunnel, is a real client.
 # The default is therefore deny for inbound, and the resolver answers on
@@ -50,6 +50,20 @@
 # `souran-firewall.sh reload`.
 # =====================================================================
 
+# ============================================================================
+# LAN SUBNET -- derived at load time, not hardcoded.
+#
+# This was 10.103.26.0/24 and it was WRONG. The host's address changed to
+# 192.168.1.5/24, so every rule scoped to the LAN matched nothing and the
+# services became unreachable from the actual network. Measured from a
+# client namespace on 192.168.1.253: ports 53, 8082, 8383, 8083 and 853
+# were all BLOCKED -- the resolver was firewalled off from the LAN it
+# exists to serve, while the test suite still passed because it built its
+# own namespace on the stale subnet.
+#
+# $LAN is substituted by souran-firewall.sh from the interface holding the
+# default route, so a DHCP change cannot silently revoke LAN access again.
+# ============================================================================
 table inet souran_filter {
 
     # Established/related first: returning traffic for an accepted
@@ -83,8 +97,8 @@ table inet souran_filter {
         # trivially spoofable, is not a meaningful restriction at all.
         # Real DHCP traffic is: client -> server on dport 67, and server
         # -> client on sport 67 to dport 68.
-        ip saddr 10.103.26.0/24 udp dport 67 accept comment "dhcp client requests from LAN"
-        ip saddr 10.103.26.0/24 udp sport 67 udp dport 68 accept comment "dhcp replies to LAN clients"
+        ip saddr $LAN udp dport 67 accept comment "dhcp client requests from LAN"
+        ip saddr $LAN udp sport 67 udp dport 68 accept comment "dhcp replies to LAN clients"
 
         # WireGuard peers (wg0, 10.66.66.0/24) are explicitly trusted —
         # they have already authenticated cryptographically.
@@ -103,8 +117,8 @@ table inet souran_filter {
         # from it was therefore meaningless -- and it failed silently,
         # which is the worst way for a health check to fail. A health
         # endpoint must be reachable by the very thing that reports it.
-        tcp dport { 22, 53, 54, 853, 8082, 8083, 8383 } ip saddr 10.103.26.0/24 accept comment "souran: LAN services"
-        udp dport 53 ip saddr 10.103.26.0/24 accept comment "souran: DNS udp from LAN"
+        tcp dport { 22, 53, 54, 853, 8082, 8083, 8383 } ip saddr $LAN accept comment "souran: LAN services"
+        udp dport 53 ip saddr $LAN accept comment "souran: DNS udp from LAN"
 
         # NO blanket "admin ports, any source" rule.
         #

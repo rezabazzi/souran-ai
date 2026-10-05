@@ -10,6 +10,43 @@ set -euo pipefail
 NFT_CONF="/opt/souran-ai/config/souran-firewall.nft"
 TABLE="souran_filter"
 
+
+# ---- LAN subnet derivation --------------------------------------------
+#
+# The ruleset refers to $LAN rather than a literal, because a hardcoded
+# subnet rots silently: the host moved from 10.103.26.0/24 to
+# 192.168.1.0/24 and every LAN rule stopped matching, so DNS and the
+# dashboards became unreachable from the real network while the firewall
+# test still passed (it built its own namespace on the stale subnet).
+#
+# Derived from the interface holding the default route, which is the
+# network the operator's clients are actually on. wg0 and docker0 are
+# excluded: a VPN or a container bridge is not the LAN, and allowing
+# 10.0.0.0/8 to reach :53 would re-open the amplifier this ruleset exists
+# to prevent.
+lan_subnet() {
+    local dev addr
+    dev="$(ip -4 route show default 2>/dev/null | awk '/default/ {for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}')"
+    if [ -n "$dev" ]; then
+        addr="$(ip -4 -o addr show dev "$dev" scope global 2>/dev/null | awk '{print $4}' | head -1)"
+        if [ -n "$addr" ]; then
+            echo "${addr%/*}" | awk -F. '{printf "%s.%s.%s.0/24\n",$1,$2,$3}'
+            return 0
+        fi
+    fi
+    echo "${SOURAN_FALLBACK_LAN:-192.168.1.0/24}"
+}
+
+render_ruleset() {
+    # Substitute $LAN into a temp copy; never edit the tracked file, so the
+    # derived value is not baked into version control.
+    local lan tmp
+    lan="$(lan_subnet)"
+    tmp="$(mktemp /tmp/souran-nft.XXXXXX.nft)"
+    sed "s|\$LAN|$lan|g" "$NFT_CONF" > "$tmp"
+    echo "$tmp"
+}
+
 usage() {
     cat <<'EOF'
 usage: souran-firewall.sh {load|reload|status|test|save}
@@ -23,7 +60,7 @@ EOF
 }
 
 cmd_test() {
-    nft --check --file "$NFT_CONF" && echo "syntax OK"
+    nft --check --file "$(render_ruleset)" && echo "syntax OK"
 }
 
 # Publish firewall/NAT state where the unprivileged control plane can read
@@ -78,7 +115,7 @@ cmd_load() {
         echo "souran firewall already loaded (state refreshed)"
         return 0
     fi
-    nft --file "$NFT_CONF"
+    nft --file "$(render_ruleset)"
     publish_state
     echo "souran firewall loaded"
 }
@@ -87,7 +124,7 @@ cmd_reload() {
     # Delete only OUR table. `nft flush ruleset` would take Docker's NAT
     # rules with it and silently break container networking.
     nft delete table inet "$TABLE" 2>/dev/null || true
-    nft --file "$NFT_CONF"
+    nft --file "$(render_ruleset)"
     publish_state
     echo "souran firewall reloaded"
 }

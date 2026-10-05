@@ -43,9 +43,48 @@ import time
 NS = "sourantest"
 VETH_HOST = "sth0"
 VETH_NS = "sthn0"
-HOST_IP = "10.103.26.254"
-NS_IP = "10.103.26.253"
-SUBNET = "10.103.26.0/24"
+
+
+def _lan_subnet():
+    """The subnet the ruleset is actually scoped to.
+
+    This test used to hardcode 10.103.26.0/24 -- the host's address at the
+    time. When the host moved to 192.168.1.0/24 the firewall's allow rules
+    stopped matching anything and every LAN service, DNS included, became
+    unreachable from the real network. THIS SUITE STILL PASSED, because it
+    built its own namespace on the stale subnet and so tested a network
+    that no longer existed on this host.
+
+    A test that passes while the thing it tests is broken is worse than no
+    test at all, so the subnet is derived the same way the ruleset derives
+    it: from the interface holding the default route.
+    """
+    dev = subprocess.run(
+        ["ip", "-4", "route", "show", "default"],
+        capture_output=True, text=True).stdout
+    for tok in dev.split():
+        pass
+    iface = ""
+    parts = dev.split()
+    for i, t in enumerate(parts):
+        if t == "dev" and i + 1 < len(parts):
+            iface = parts[i + 1]
+            break
+    if not iface:
+        return "192.168.1"
+    out = subprocess.run(["ip", "-4", "-o", "addr", "show", "dev", iface,
+                          "scope", "global"],
+                         capture_output=True, text=True).stdout
+    cidr = out.split()[3] if len(out.split()) > 3 else ""
+    if not cidr:
+        return "192.168.1"
+    return cidr.split("/")[0].rsplit(".", 1)[0]
+
+
+_LAN = _lan_subnet()
+HOST_IP = f"{_LAN}.254"
+NS_IP = f"{_LAN}.253"
+SUBNET = f"{_LAN}.0/24"
 
 # 54 is deliberately NOT here: it is the resolver's health endpoint,
 # queried by both dashboards. It was in this list until an adversarial
@@ -62,7 +101,7 @@ ALLOWED = [53, 54, 8082, 8383, 22]
 # `tcp dport {22,53,853,8082,8083,8383} accept` with no source
 # constraint, opening SSH and both control dashboards to every source on
 # every interface. Asserting from a non-LAN address is what catches that.
-LAN_SUBNET = "10.103.26.0/24"
+LAN_SUBNET = SUBNET
 
 
 def sh(cmd, check=True):
