@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
-Souran Client — cross-platform configuration helper for the Souran AI
-Network Server.
+Souran Client — configuration helper for the Souran AI Network Server.
+
+WHAT THIS IS NOT: it is not an installer for Windows, macOS or Android,
+and configuring a client is not the same as supporting an OS. It runs on
+whatever machine runs Python 3.9+, and it changes that machine's DNS
+settings using the OS's own tooling. There are no .msi, .pkg or .apk
+packages, and none would help: an APK cannot set Private DNS for other
+apps, and macOS has no encrypted-DNS facility to configure.
 
 File: souran_client.py  |  Python 3.9+, standard library only
 License: GPL-3.0-or-later
@@ -47,10 +53,16 @@ PLATFORM SUPPORT (measured against current documentation)
   Linux    systemd-resolved via `resolvectl dns <link> <addr>`; falls back
            to /etc/resolv.conf (with a backup) when resolved is absent.
   macOS    `networksetup -setdnsservers <service> <addr>` per active
-           service; scutil to enumerate them.
-  Windows  `netsh interface ip set dnsservers name="<if>" static <addr>`
-           plus `netsh interface ip set dnsservers name="<if>" validate=no`
-           for DoH. Administrator privileges required.
+           service; scutil to enumerate them. NOTE: this is PLAINTEXT DNS.
+           macOS has no OS-level encrypted-DNS setting, so pointing a Mac
+           at the resolver gives no encryption at all. Encrypted DNS on
+           macOS needs a local DoT forwarder plus 127.0.0.1, or an MDM DNS
+           Proxy profile. This tool does not claim otherwise.
+  Windows  `netsh interface ip set dnsservers name="<if>" static <addr>`,
+           then real DoH via `netsh dnsclient add encryption server=<addr>
+           dohtemplate=https://<name>/dns-query autoupgrade=yes
+           udpfallback=no` and `netsh dnsclient set global doh=yes`.
+           Administrator privileges required.
   Android  NOT configured by this tool. Android's Private DNS setting is
            a user-facing toggle and it ALWAYS uses DoT on port 853 with no
            port field. See --android for the CA install path.
@@ -415,7 +427,7 @@ def _macos_apply(server, dry_run):
     return True
 
 
-def _windows_apply(server, dry_run):
+def _windows_apply(server, dry_run, doh_name=None):
     rc, out, _ = run(["netsh", "interface", "ipv4", "show", "interfaces"])
     if rc != 0:
         warn("netsh not available (not Windows?)")
@@ -432,11 +444,28 @@ def _windows_apply(server, dry_run):
         say(f"  interface: {n}")
         run(["netsh", "interface", "ip", "set", "dnsservers",
              f"name={n}", "static", server], dry_run)
-        # DNS over HTTPS is enabled per-interface. `validate=no` trusts
-        # the resolver's own CA rather than a public CA, which is the
-        # whole point of self-hosting.
-        run(["netsh", "interface", "ip", "set", "dnsservers",
-             f"name={n}", "validate=no"], dry_run)
+
+    # DNS over HTTPS is a SEPARATE registration, not a flag on
+    # `set dnsservers`.
+    #
+    # This previously ran `netsh interface ip set dnsservers ...
+    # validate=no` and the comment claimed it "trusts the resolver's own CA
+    # rather than a public CA". That is not what the flag does: Microsoft's
+    # reference defines `validate` as whether to validate the DNS SERVER
+    # SETTING, i.e. address validation. It carries no certificate
+    # semantics, so the path configured plain DNS and reported DoH.
+    #
+    # The real commands are `netsh dnsclient add encryption` (per server
+    # address and DoH template) and `netsh dnsclient set global doh=yes`.
+    # The template carries the NAME, so SNI and certificate validation
+    # still work against a self-hosted CA.
+    doh_name = doh_name or server
+    template = f"https://{doh_name}/dns-query"
+    say(f"  registering DoH template: {template}")
+    run(["netsh", "dnsclient", "add", "encryption",
+         f"server={server}", f"dohtemplate={template}",
+         "autoupgrade=yes", "udpfallback=no"], dry_run)
+    run(["netsh", "dnsclient", "set", "global", "doh=yes"], dry_run)
     return True
 
 
@@ -454,13 +483,33 @@ def cmd_apply(args):
         die("resolver did not pass its own test; nothing was changed")
     say()
 
+    # The OS tooling needs an ADDRESS, not a name.
+    #
+    # `netsh ... static <server>` and `networksetup -setdnsservers <svc>
+    # <server>` both require an IP literal and reject a hostname. This
+    # passed `args.server` straight through, so the apply path was broken
+    # on Windows and macOS whenever the server was given by name -- which is
+    # the documented usage. `resolve_endpoint` already existed and was used
+    # by `test`, so the test path proved the name resolves and then the
+    # apply path handed the NAME to a command that cannot use it.
+    #
+    # Resolve once, here, and pass the address. The name is still used for
+    # SNI and certificate verification, which is unchanged.
+    server_addr = args.connect_ip
+    if not server_addr:
+        server_addr, _sni = resolve_endpoint(args.server)
+    if not server_addr:
+        die(f"cannot resolve {args.server} to an address; pass --connect-ip"
+            f" if it has no A/AAAA record")
+    say(f"address   : {server_addr}  (from {args.server})")
+
     sysname = platform.system()
     if sysname == "Linux":
-        ok = _linux_apply(args.server, dry)
+        ok = _linux_apply(server_addr, dry)
     elif sysname == "Darwin":
-        ok = _macos_apply(args.server, dry)
+        ok = _macos_apply(server_addr, dry)
     elif sysname == "Windows":
-        ok = _windows_apply(args.server, dry)
+        ok = _windows_apply(server_addr, dry, args.server)
     else:
         die(f"unsupported platform {sysname!r}; see --android for Android")
 

@@ -171,9 +171,16 @@ channel to *your* resolver, not to a public CA.
 
 ---
 
-## Client (Windows / macOS / Linux / Android)
+## Client helper (runs on Windows / macOS / Linux)
 
 One file, standard library only, no build step.
+
+**This is a configuration helper, not OS support.** It runs wherever
+Python 3.9+ runs and changes that machine's DNS settings using the OS's
+own tooling. There are no `.msi`, `.pkg` or `.apk` packages, and building
+them would not help: an APK cannot set Private DNS for other apps, and
+macOS has no OS-level encrypted-DNS facility to configure at all. The
+server is Linux; this is a script you run on a client.
 
 ```bash
 # always test before applying — never point a machine at a dead server
@@ -186,12 +193,23 @@ python3 souran_client.py apply --server mordaddns.ir --ca souran-dns-ca.crt
 python3 souran_client.py apply --server mordaddns.ir --ca souran-dns-ca.crt --yes
 ```
 
-| Platform | Mechanism | Needs root |
-|---|---|---|
-| Linux | `resolvectl dns` / `systemd-resolved`; falls back to `/etc/resolv.conf` with a backup | yes |
-| macOS | `networksetup -setdnsservers` per active service | yes |
-| Windows | `netsh interface ip set dnsservers` + `validate=no` for DoH | yes (elevated) |
-| Android | **not automated** — see below | n/a |
+| Platform | Mechanism | Encrypted? | Needs root |
+|---|---|---|---|
+| Linux | `resolvectl dns` / `systemd-resolved`; falls back to `/etc/resolv.conf` with a backup | plaintext, unless the resolver link is set to DoT/DoH by hand | yes |
+| macOS | `networksetup -setdnsservers` per active service | **no** — see below | yes |
+| Windows | `netsh interface ip set dnsservers`, then `netsh dnsclient add encryption` + `set global doh=yes` | yes, DoH | yes (elevated) |
+| Android | **not automated** — see below | DoT 853 via Private DNS | user toggles it |
+
+On macOS this sets a **plaintext** DNS server. macOS exposes no encrypted
+DNS setting, so a Mac pointed at the resolver gets no encryption at all;
+encrypted DNS there requires a local DoT forwarder plus `127.0.0.1`, or an
+MDM DNS Proxy profile. Claiming otherwise would be false.
+
+An earlier version of this file claimed `validate=no` enabled DoH on
+Windows. It does not: Microsoft's reference defines `validate` as whether
+to validate the DNS *server setting*, i.e. address validation, with no
+certificate semantics. The Windows path now uses `netsh dnsclient`, which
+is what actually registers DoH.
 
 Android gets printed instructions instead of automation, on purpose:
 Private DNS is a user-facing Settings toggle, it always uses DoT on 853
