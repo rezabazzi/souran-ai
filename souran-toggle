@@ -164,9 +164,13 @@ with open('$FORWARDING_APP', 'w') as f:
 
 restart_dns() {
     echo "[DNS] Restarting Technitium..."
-    sudo -S -p '' <<< "" pkill -f DnsServerApp 2>/dev/null
+    # sudo -n, not the old sudo -S with a here-string password.
+    # -S reads a credential from stdin, which put a plaintext sudo
+    # password in a TRACKED source file and therefore in git history.
+    # The operator has NOPASSWD for these actions, so -n suffices.
+        sudo -n pkill -f DnsServerApp 2>/dev/null
     sleep 2
-    cd /opt/souran-ai/dns && sudo -S -p '' <<< "" /usr/bin/dotnet DnsServerApp.dll /opt/souran-ai/dns &
+    cd /opt/souran-ai/dns && sudo -n /usr/bin/dotnet DnsServerApp.dll /opt/souran-ai/dns &
     sleep 5
     echo "[DNS] Restarted on port 53"
 }
@@ -240,7 +244,7 @@ case "$1" in
         echo "blocklists       = $(get_toggle blocklists)"
         echo ""
         echo "=== Active Ports ==="
-        sudo -S -p '' <<< "" ss -tlnp | grep -E ':(53|853|443|53443) ' | awk '{print $4, $7}'
+        sudo -n ss -tlnp | grep -E ':(53|853|443|53443) ' | awk '{print $4, $7}'
         echo ""
         echo "=== DNS Resolution ==="
         dig @127.0.0.1 google.com A +short +time=3 +tries=1 2>/dev/null && echo "  google.com: OK" || echo "  google.com: FAIL"
