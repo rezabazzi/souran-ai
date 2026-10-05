@@ -61,6 +61,24 @@ VALID_STATES = ("on", "off")
 
 FEATURES = {
     # ---------------- DNS core ----------------
+    "lan_names": dict(
+        category="dns",
+        label="LAN Name Service (forward + reverse)",
+        description=("Serves LAN hostnames and their PTR records from "
+                     "operator entries, /etc/hosts, DHCP leases and this "
+                     "host's own addresses. Only names with a real source "
+                     "are published -- no invented neighbours. Manage "
+                     "with souran_lan.py add/remove."),
+        units=[("souran-dns", "reload", "reload")],
+        requires=["dns_recursive", "dns_frontend"],
+        # Needs BOTH: the ruleset in the config AND the front-end
+        # exemption that lets a private address be a correct answer for a
+        # local name. Without the second, unbound answers correctly and
+        # the front-end returns NXDOMAIN.
+        probe=("(lan_zone_loaded() and unit_active('souran-dns') "
+               "and unit_active('souran-doh-fallback'), "
+               "'LAN zone served and front-end exempt')"),
+    ),
     "ad_blocklists": dict(
         category="dns",
         label="Ad/Tracker/Malware Blocking (426k domains)",
@@ -405,6 +423,23 @@ def _run(cmd, timeout=8):
         return 1, "", str(exc)
 
 
+def lan_zone_loaded():
+    """Is the LAN zone compiled AND referenced by the live config?
+
+    The front-end exemption is not checkable from here, so the probe also
+    requires the front-end unit to be active -- that is the coarse check
+    available, and the honest place to record it.
+    """
+    try:
+        with open("/opt/souran-ai/config/souran-unbound.conf.yaml") as fh:
+            conf = fh.read()
+    except OSError:
+        return False
+    if "config/blocklists/lan.conf" not in conf:
+        return False
+    return os.path.exists("/opt/souran-ai/config/blocklists/lan.conf")
+
+
 def blocklist_loaded():
     """Is the compiled blocklist actually included in the live config?
 
@@ -586,6 +621,7 @@ PROBE_SCOPE = {
     # fails as "name 'x' is not defined", which the registry surfaces
     # honestly rather than silently reporting the feature as off.
     "blocklist_loaded": blocklist_loaded,
+    "lan_zone_loaded": lan_zone_loaded,
     "tcp_open": tcp_open,
     "read_cfg": read_cfg,
     "nat_dns_redirect_present": nat_dns_redirect_present,

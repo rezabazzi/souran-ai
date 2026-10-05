@@ -26,7 +26,6 @@ Environment=SOURAN_DOH_HOST=cloudflare-dns.com
 Environment=SOURAN_DOH_URL=https://cloudflare-dns.com/dns-query
 Environment=SOURAN_DOH_URL2=https://dns.google/resolve
 Environment=SOURAN_DOH_BUDGET=12
-Environment=SOURAN_DOH_INTERVAL=0.9
 Environment=SOURAN_CLIENT_TIMEOUT=25
 LimitNOFILE=65536
 MemoryMax=512M

@@ -162,8 +162,37 @@ _negcache = {}
 NEGCACHE_MAX = 4096
 NEG_TTL = 5.0
 
-# Ranges that must never be a legitimate answer for a public name on a
+# Names served from the local zone, where a private address is the
+# CORRECT answer rather than evidence of injection.
+#
+# This resolver answers for the LAN as well as the internet, so
+# 10.0.0.0/8 is both the poison signature AND the local network. Without
+# this exemption the front-end discarded its own LAN answers: unbound
+# answered `souran.souran.lan -> 10.103.26.86` with the aa flag set, and
+# the front-end returned NXDOMAIN because that address is inside the
+# poison range.
+#
+# The poison check is NOT weakened. It applies in full to every name
+# outside the local zone -- which is where injection actually happens. A
+# public name still cannot be made to answer with a private address.
+# Deliberately NOT including a bare "lan": that exempts every .lan name
+# in the world, which is not what is served locally. Only zones this
+# resolver actually answers for are exempt, so the poison check keeps
+# full force everywhere else.
+LOCAL_ZONE_SUFFIXES = ("souran.lan", "home.arpa")
+
+
+def is_local_name(qname) -> bool:
+    """True for names this resolver answers authoritatively for locally."""
+    n = (qname or "").strip().lower().rstrip(".")
+    if not n:
+        return False
+    return any(n == z or n.endswith("." + z) for z in LOCAL_ZONE_SUFFIXES)
+
+
+# Ranges that must never be a legitimate answer for a PUBLIC name on a
 # global recursive resolver. Seeing these == upstream injection.
+# Exempt for local names -- see is_local_name above.
 POISON_NETS = [
     (0x0A000000, 0xFF000000),   # 10.0.0.0/8
     (0x7F000000, 0xFF000000),   # 127.0.0.0/8
@@ -813,7 +842,10 @@ def _resolve_uncached(qname: str, qtype: int):
             if rcode == 0:
                 has_rrs = any(True for _r, _d, _t in iter_answers(payload))
                 useful = has_answer_of_type(payload, qtype)
-                poisoned = bool(ips) and any(is_poison(ip) for ip in ips)
+                # A private address is correct for a local name and is the
+                # poison signature for a public one. The name decides.
+                poisoned = (bool(ips) and not is_local_name(qname)
+                             and any(is_poison(ip) for ip in ips))
                 if useful and not poisoned:
                     STATS["primary"] += 1
                     _cache_put((qname.lower(), qtype), payload, 300)
@@ -881,7 +913,8 @@ def _resolve_uncached(qname: str, qtype: int):
         # type goes through verbatim rdata so MX/TXT/CNAME/SRV/SVCB work.
         if qtype in ADDRESS_TYPES:
             ips = _doh_get(url, qname, qtype)
-            if ips and not any(is_poison(ip) for ip in ips):
+            if ips and (is_local_name(qname)
+                            or not any(is_poison(ip) for ip in ips)):
                 STATS["fallback"] += 1
                 # Build a REAL answer from the clean DoH result. Returning the
                 # upstream unbound payload here would re-serve the injected
