@@ -138,6 +138,7 @@ FEATURES = {
                      "refresh happens in the background."),
         units=[],  # config-level only
         requires=["dns_recursive"],
+        config_toggle=True,   # rewrites prefetch
         probe="(read_cfg('config/souran-unbound.conf.yaml', 'prefetch') == 'yes', 'prefetch')",
     ),
     "dns_dnssec": dict(
@@ -151,6 +152,7 @@ FEATURES = {
         units=[],
         requires=["dns_recursive"],
         default="off",   # permissive today; strict cannot work over Tor
+        config_toggle=True,   # rewrites val-permissive-mode in unbound.conf
         probe="(read_cfg('config/souran-unbound.conf.yaml', 'module-config') == '\"validator iterator\"' and read_cfg('config/souran-unbound.conf.yaml', 'val-permissive-mode') == 'no', 'strict DNSSEC validation')",
     ),
     "dns_tcp_upstream": dict(
@@ -162,6 +164,7 @@ FEATURES = {
                      "latency, materially more trustworthy."),
         units=[],
         requires=["dns_recursive"],
+        config_toggle=True,   # rewrites tcp-upstream
         probe="(read_cfg('config/souran-unbound.conf.yaml', 'tcp-upstream') == 'yes', 'TCP upstream')",
     ),
     "dns_doh_tier": dict(
@@ -171,6 +174,7 @@ FEATURES = {
                      "escalate to DoH on HTTPS/443 — the only transport that "
                      "is clean on this network."),
         requires=["dns_frontend"],
+        config_toggle=True,   # systemd drop-in for SOURAN_DOH_URL
         probe="(unit_active('souran-doh-fallback'), 'escalation inside front-end')",
     ),
 
@@ -218,6 +222,7 @@ FEATURES = {
                      "query to Tor, so the host cannot be poisoned at the source."),
         units=[],
         requires=["censor_tor"],
+        config_toggle=True,   # nft rule in the nat table
         probe="(nat_dns_redirect_present(), 'outbound :53 -> :9053')",
     ),
 
@@ -248,6 +253,7 @@ FEATURES = {
         description="Local JSON-RPC proxy so chain traffic avoids direct endpoints.",
         units=[],
         requires=["censor_tor"],
+        config_toggle=True,   # API flag in the sidecar state file
         probe="(web3_rpc_ok(), 'ENS/RPC API answering')",
     ),
 
@@ -435,24 +441,45 @@ def lan_zone_loaded():
             conf = fh.read()
     except OSError:
         return False
-    if "config/blocklists/lan.conf" not in conf:
-        return False
-    return os.path.exists("/opt/souran-ai/config/blocklists/lan.conf")
+    del conf
+    return (include_is_active("config/blocklists/lan.conf")
+            and os.path.exists("/opt/souran-ai/config/blocklists/lan.conf"))
 
 
-def blocklist_loaded():
-    """Is the compiled blocklist actually included in the live config?
+def include_is_active(path_fragment: str) -> bool:
+    """Is this `include:` line live, rather than commented out?
 
-    Presence of the generated file is NOT enough: the file existed while
-    the config still pointed nowhere, and while an invalid stanza crashed
-    the resolver outright. This checks the thing that matters -- that the
-    running config references it.
+    Switching a ruleset OFF works by prefixing its include with
+    `#souran-feature-off:`. A naive `"<path>" in conf` test still finds
+    the path inside that comment, so the feature probes as ON while it is
+    demonstrably off. Measured: with blocking disabled, doubleclick.net
+    resolved to a real Google address while the probe reported effective=on
+    and the registry showed drift against itself.
+
+    So the test is per line, and a disabled line does not count.
     """
     try:
         with open("/opt/souran-ai/config/souran-unbound.conf.yaml") as fh:
-            return "config/blocklists/blocklist.conf" in fh.read()
+            for line in fh:
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if "include:" in stripped and path_fragment in stripped:
+                    return True
     except OSError:
         return False
+    return False
+
+
+def blocklist_loaded():
+    """Is the compiled blocklist actually INCLUDED (not just present)?
+
+    Presence of the generated file is not enough, and neither is the mere
+    appearance of its path in the config: the include may be commented out
+    because the feature is switched off.
+    """
+    return (include_is_active("config/blocklists/blocklist.conf")
+            and os.path.exists("/opt/souran-ai/config/blocklists/blocklist.conf"))
 
 
 def unit_active(unit: str) -> bool:
@@ -730,7 +757,12 @@ def full_report() -> dict:
             "unmet_requirements": unmet,
             # Drift is the interesting signal: asked for but not true.
             "drift": (want == "on") != bool(eff),
-            "controllable": bool(spec.get("units")),
+            # Actionable if it has a unit OR an explicit override.
+            # The unit test alone under-reports config-level features,
+            # which are switched by rewriting config and reloading --
+            # genuinely actionable, just not via systemctl.
+            "controllable": bool(spec.get("units")
+                                 or spec.get("config_toggle")),
         }
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -846,7 +878,14 @@ def set_feature(fid: str, state_want: str, persist: bool = True) -> dict:
     # happened.
     eff = False
     detail = "not yet applied"
-    for _ in range(8):
+    # 45 s, not 8. The executor timer fires every 15 s, so an 8 s poll gave
+    # up before the intent could possibly be applied and the API returned
+    # "apply failed" for a change that had already succeeded -- measured:
+    # the response said failed, and 20 s later the resolver was answering
+    # with blocking off. Two polls at 8 s and 20 s would have been enough;
+    # 45 s leaves room for a timer that is already part-way through a
+    # cycle plus a slow unbound reload.
+    for _ in range(45):
         eff, detail = probe_feature(fid)
         if (state_want == "on") == bool(eff):
             break

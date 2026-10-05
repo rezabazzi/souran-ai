@@ -1,5 +1,6 @@
 {
   "features": {
+    "ad_blocklists": "on",
     "alt_ouinet": "off",
     "alt_veltor": "off",
     "blocklists": "off",
@@ -21,6 +22,7 @@
     "dns_tcp_upstream": "on",
     "dnssec": "off",
     "gaming_dns": "on",
+    "lan_names": "on",
     "ops_anticompress": "on",
     "ops_cloudflared": "on",
     "ops_dashboard_hermes": "on",
@@ -38,5 +40,5 @@
     "web3_rpc": "on"
   },
   "migrated_from": "/opt/souran-ai/toggles.conf",
-  "updated_at": "2026-10-05T00:14:37.019879+00:00"
+  "updated_at": "2026-10-05T10:52:04.844271+00:00"
 }

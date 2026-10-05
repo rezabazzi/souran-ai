@@ -92,6 +92,17 @@ units_for() {
         censor_outbound_dns)  echo "" ;;
         web3_rpc)             echo "" ;;
         dns_dnssec_tor_note)  echo "" ;;
+        # No unit on purpose: these act on a generated RULESET and must
+        # end with a reload of souran-dns. Mapping them to the unit
+        # makes the action `systemctl enable --now`, a no-op for an
+        # already-active unit, so the new rules were never loaded and
+        # the toggle reported success with blocking still off.
+        ad_blocklists)        echo "" ;;
+        lan_names)            echo "" ;;
+        # Optional projects: no unit, so they reach apply_config,
+        # which refuses them explicitly as not-installed.
+        alt_ouinet)           echo "" ;;
+        alt_veltor)           echo "" ;;
         proxy_xray)           echo "xray" ;;
         proxy_hysteria)        echo "hysteria" ;;
         proxy_singbox)         echo "sing-box" ;;
@@ -104,6 +115,82 @@ units_for() {
 }
 
 UNITS="$(units_for "$FEATURE")"
+
+# ---- helpers for config-backed features -------------------------------
+#
+# These exist so the handlers below stay declarative. Each one changes
+# exactly one thing and reports failure, rather than a `sed` that may
+# match nothing and still report success.
+
+# systemd drop-in for a unit: the only supported way to change a unit's
+# Environment= without editing the packaged unit file.
+setenv_dropin() {
+    local unit="$1"; shift
+    local dir="/etc/systemd/system/${unit}.service.d"
+    mkdir -p "$dir"
+    {
+        echo "# Managed by souran-feature-apply.sh -- do not edit."
+        for kv in "$@"; do echo "Environment=$kv"; done
+    } > "$dir/90-souran-feature.conf"
+    systemctl daemon-reload >/dev/null 2>&1 || return 1
+}
+
+# JSON flag in the sidecar's own state file.
+set_api_flag() {
+    local key="$1" val="$2"
+    local f=/opt/souran-ai/logs/api-flags.json
+    [ -f "$f" ] || echo "{}" > "$f"
+    python3 - "$f" "$key" "$val" <<'PY' || return 1
+import json, sys
+path, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(path) as fh:
+        data = json.load(fh)
+except (OSError, ValueError):
+    data = {}
+data[key] = val == "true"
+with open(path, "w") as fh:
+    json.dump(data, fh, indent=2)
+PY
+}
+
+# Enable/disable a generated ruleset by commenting its `include:` line.
+#
+# NOT by deleting the file. The config `include:`s the ruleset, so
+# deleting it makes unbound-checkconf fail, unbound refuses to reload,
+# and the toggle silently has no effect -- and the resolver then cannot
+# restart at all, because there is no valid config to start from.
+# Measured: souran-dns went to `activating` with the file absent.
+#
+# Commenting the include is reversible, always leaves a valid config, and
+# the generated file is cheap to keep (it rebuilds in ~8 s).
+ruleset_include() {
+    # $1 = the path fragment identifying this feature's include
+    # $2 = yes | no
+    #
+    # Two mistakes worth recording, both made and both caught by testing:
+    #   * matching on `f` (the feature id) did not match the PATH, which
+    #     is spelled blocklist.conf / lan.conf, so nothing was commented;
+    #   * the first version also matched the explanatory COMMENT line
+    #     that mentions the same path, and commented that instead.
+    # So: match the exact include target, and never a comment line.
+    local conf=/opt/souran-ai/config/souran-unbound.conf.yaml
+    local target="$1" want="$2"
+    local tmp; tmp="$(mktemp)"
+    awk -v t="$target" -v want="$want" '
+        # strip any existing disable marker first
+        { line = $0; sub(/^#souran-feature-off:/, "", line) }
+        line ~ ("^[[:space:]]*include:.*" t) {
+            if (want == "yes") { print line }
+            else              { print "#souran-feature-off:" line }
+            next
+        }
+        { print line }
+    ' "$conf" > "$tmp"
+    cat "$tmp" > "$conf"
+    rm -f "$tmp"
+    return 0
+}
 
 # ---- config-backed features --------------------------------------------
 apply_config() {
@@ -121,7 +208,54 @@ apply_config() {
             sed -i 's/^\( *\)prefetch: .*/\1prefetch: yes/' "$conf" ;;
         dns_cache_prefetch:disable)
             sed -i 's/^\( *\)prefetch: .*/\1prefetch: no/' "$conf" ;;
-        *) return 0 ;;
+
+        # --- DoH escalation tier ---------------------------------------
+        # The tier is the front-end's own SOURAN_DOH_URL setting, so it is
+        # a unit drop-in rather than a YAML key.
+        dns_doh_tier:enable)
+            setenv_dropin souran-doh-fallback \
+                "SOURAN_DOH_URL=https://cloudflare-dns.com/dns-query" \
+                "SOURAN_DOH_URL2=https://dns.google/resolve" ;;
+        dns_doh_tier:disable)
+            setenv_dropin souran-doh-fallback "SOURAN_DOH_URL=" "SOURAN_DOH_URL2=" ;;
+
+        # --- the two ruleset features ----------------------------------
+        ad_blocklists:disable)
+            ruleset_include "blocklist.conf" no ;;
+        ad_blocklists:enable)
+            ruleset_include "blocklist.conf" yes
+            /opt/souran-ai/souran_blocklists.py compile >/dev/null 2>&1 || return 1 ;;
+        lan_names:disable)
+            ruleset_include "lan.conf" no ;;
+        lan_names:enable)
+            ruleset_include "lan.conf" yes
+            /opt/souran-ai/souran_lan.py compile >/dev/null 2>&1 || return 1 ;;
+
+        # --- blockchain RPC gateway ------------------------------------
+        web3_rpc:enable)  set_api_flag rpcGatewayEnabled true  ;;
+        web3_rpc:disable) set_api_flag rpcGatewayEnabled false ;;
+
+        # --- features that are NOT installed on this host --------------
+        # Enabling software that is absent would be a claim about
+        # something that is not there. Refuse explicitly.
+        alt_ouinet:*|alt_veltor:*)
+            echo "error: ${FEATURE} is not installed on this host; install it" >&2
+            echo "       first, then the toggle becomes meaningful." >&2
+            return 1 ;;
+
+        # --- an informational note, not a capability -------------------
+        dns_dnssec_tor_note:*)
+            echo "error: ${FEATURE} is a note, not a switchable feature." >&2
+            return 1 ;;
+
+        # Anything unhandled REFUSES. The old `*) return 0` reported
+        # "ok" for seven features while changing nothing at all, which is
+        # the exact class of confident falsehood this registry exists to
+        # eliminate.
+        *)
+            echo "error: ${FEATURE} ${ACTION} has no apply handler; refusing" >&2
+            echo "       to report success for an action that does nothing." >&2
+            return 1 ;;
     esac
     log CONFIG "feature=${FEATURE} action=${ACTION} file=${conf}"
     systemctl reload souran-dns >/dev/null 2>&1 || \
