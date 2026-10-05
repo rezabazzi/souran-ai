@@ -1570,6 +1570,9 @@ run_cycle() {
   run_check "mysql"        "check_mysql"        "fix_mysql"        "MySQL"            || failed=$((failed+1))
   run_check "technitium"   "check_technitium"   "fix_technitium"   "Technitium"       || failed=$((failed+1))
   run_check "unbound"      "check_unbound"      "fix_unbound"      "Unbound Oracle"   || failed=$((failed+1))
+  # Generated zone files referenced by unbound's config. A missing one
+  # makes unbound-checkconf fail, i.e. the resolver cannot start at all.
+  run_check "zones"       "check_generated_zones" "fix_generated_zones" "Generated zones" || failed=$((failed+1))
   run_check "bind9"        "check_bind9"        "fix_bind9"        "BIND9"            || failed=$((failed+1))
   run_check "coredns"      "check_coredns"      "fix_coredns"      "CoreDNS"          || failed=$((failed+1))
   run_check "powerdns"     "check_powerdns"     "fix_powerdns"     "PowerDNS"         || failed=$((failed+1))
@@ -1751,3 +1754,63 @@ init_dirs
 trap 'log_info "Watchdog stopping (clean exit for systemd)"; release_lock; exit 0' INT TERM HUP QUIT
 
 if [[ $# -gt 0 && "${1:-}" != "run" ]]; then cli "$@"; else main_loop; fi
+
+# Generated rulesets referenced by unbound's config.
+#
+# WHY THIS IS A SEPARATE CHECK
+#
+# souran_blocklists and souran_lan each write a generated file and then add
+# a top-level `include:` to souran-unbound.conf.yaml pointing at it. If that
+# file goes missing -- a partial dpkg operation, a cleared cache directory,
+# a failed compile -- unbound-checkconf FAILS and the resolver will not start
+# at all. A total DNS outage created by a housekeeping file, which is
+# exactly what happened while these features were being built.
+#
+# The service being "active" proves nothing either way: unbound reads its
+# config at startup, so a ruleset deleted afterwards leaves a running
+# resolver that breaks on the very next restart.
+check_generated_zones() {
+  local conf="/opt/souran-ai/config/souran-unbound.conf.yaml"
+  local bad=0 f ref
+  [[ -f "$conf" ]] || { log_warn "  [Zones] unbound config missing"; return 1; }
+
+  # Every include: target must exist.
+  while read -r ref; do
+    [[ -z "$ref" ]] && continue
+    f="${ref//\"/}"
+    if [[ ! -f "$f" ]]; then
+      log_warn "  [Zones] included file MISSING: $f"
+      bad=1
+    fi
+  done < <(grep -oE 'include:[[:space:]]*"[^"]+"' "$conf" 2>/dev/null \
+           | sed -E 's/include:[[:space:]]*"//; s/"$//')
+
+  if [[ "$bad" -eq 0 ]]; then
+    # And the config must actually parse -- that is what really decides
+    # whether unbound can start.
+    if ! /opt/souran-ai/engine/unbound/sbin/unbound-checkconf "$conf" \
+         >/dev/null 2>&1; then
+      log_warn "  [Zones] unbound config does NOT validate"
+      bad=1
+    fi
+  fi
+
+  [[ "$bad" -eq 0 ]] && { log_ok "  [Zones] includes present, config validates"; return 0; }
+  return 1
+}
+
+fix_generated_zones() {
+  log_warn "  [Fix] recompiling generated zones"
+  # Recompile rather than delete the include: removing it would silently
+  # drop the operator's ad-blocking and LAN names just to clear the symptom.
+  python3 /opt/souran-ai/souran_blocklists.py compile >/dev/null 2>&1 || true
+  python3 /opt/souran-ai/souran_lan.py compile       >/dev/null 2>&1 || true
+  sleep 2
+  if check_generated_zones; then
+    systemctl reload souran-dns >/dev/null 2>&1 || true
+    log_ok "  [Fix] zones recompiled"
+    return 0
+  fi
+  log_error "  [Fix] zones still broken"
+  return 1
+}

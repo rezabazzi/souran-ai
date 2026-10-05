@@ -210,6 +210,7 @@ def compile_rules(dry_run=False, force=False):
         log("nothing to compile -- no list available")
         return None
 
+    out_path = os.path.join(RULES_DIR, "blocklist.conf")
     state_path = os.path.join(RULES_DIR, "compiled.json")
     prior = {}
     if os.path.exists(state_path) and not force:
@@ -217,9 +218,16 @@ def compile_rules(dry_run=False, force=False):
             with open(state_path) as fh:
                 prior = json.load(fh)
             if set(prior.get("names", [])) == all_names:
-                log("unchanged since last compile; nothing to do")
-                return {"compiled": False, "domains": len(all_names),
-                        "reason": "unchanged"}
+                # "Unchanged" must also mean the ARTIFACT still exists. The
+                # state file once survived a deleted ruleset, and the
+                # compiler then reported success while producing nothing --
+                # leaving the watchdog UNHEALTHY with no way to heal it.
+                if os.path.exists(out_path):
+                    log("unchanged since last compile; nothing to do")
+                    return {"compiled": False, "domains": len(all_names),
+                            "reason": "unchanged"}
+                log("state file is current but the ruleset is missing; "
+                    "regenerating")
         except (OSError, ValueError):
             prior = {}
 
@@ -227,7 +235,6 @@ def compile_rules(dry_run=False, force=False):
 
     # unbound auth-zone: one local-data line per name. Sorted so the file
     # is reproducible and a diff shows only real changes.
-    out_path = os.path.join(RULES_DIR, "blocklist.conf")
     if dry_run:
         log(f"[dry-run] would write {out_path} with {len(all_names)} entries")
         return {"compiled": False, "domains": len(all_names),

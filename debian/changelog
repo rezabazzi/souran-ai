@@ -1,4 +1,4 @@
-souran (5.1.0) resolute; urgency=medium
+souran (5.2.0) resolute; urgency=medium
 
   * Security: purged a plaintext sudo password that was embedded in six
     source files and had already reached git history. Every call site now
