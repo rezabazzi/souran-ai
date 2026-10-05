@@ -152,10 +152,32 @@ case "$1" in
             chown root:unbound /opt/souran-ai/engine 2>/dev/null || true
             chmod 2775     /opt/souran-ai/engine 2>/dev/null || true
 
-            # unbound redirects its own logging into logs/, so that
-            # directory must be writable by the account it drops to.
-            chown unbound:unbound /opt/souran-ai/logs 2>/dev/null || true
-            chmod 0775 /opt/souran-ai/logs 2>/dev/null || true
+            # logs/ has THREE writers running as THREE different
+            # accounts:
+            #     unbound -> logs/unbound.log          (core resolver)
+            #     reza    -> logs/ids-alerts.log        (IDS)
+            #     root    -> the feature executor's action log
+            #
+            # A single-owner directory fixes one and breaks the other. This
+            # exact mistake was made twice: chowning logs/ to unbound made
+            # the IDS die with PermissionError on its first write, and
+            # chowning it to reza would have broken unbound instead -- in
+            # both cases silently, because the affected service only logs
+            # to a file nobody was watching.
+            #
+            # A shared group with the setgid bit is the fix: the directory
+            # stays root-owned, every writer is a member, and files created
+            # in it inherit the group.
+            if ! getent group souran-logs >/dev/null 2>&1; then
+                groupadd -r souran-logs 2>/dev/null || true
+            fi
+            for u in unbound SOURAN_USER; do
+                getent passwd "$u" >/dev/null 2>&1 || continue
+                id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx souran-logs || \
+                    usermod -aG souran-logs "$u" 2>/dev/null || true
+            done
+            chown root:souran-logs /opt/souran-ai/logs 2>/dev/null || true
+            chmod 2775 /opt/souran-ai/logs 2>/dev/null || true
         fi
 
         # An UPGRADE must restore whatever was running before. A fresh

@@ -30,19 +30,26 @@ mkdir -p "$DEST" "$DEB/$LIBDIR/systemd/system" "$DEST/logs"
 
 # --- Python modules, metadata, control scripts --------------------------
 cp -a ./*.py "$DEST/"
-# README.md and CHANGELOG.md are deliberately NOT shipped in the payload.
+# README.md, CHANGELOG.md and VERSION ARE shipped, and are deliberately
+# NOT declared as conffiles. All three dpkg behaviours were measured here
+# and all three are undesirable for this tree:
 #
-# dpkg unpacks straight over /opt/souran-ai, and here the source tree IS
-# the deployed tree -- so shipping docs means every `dpkg -i` overwrites
-# the working copy with whatever was on disk at build time. That is data
-# loss, not a cosmetic issue: it silently destroyed a 12 KB README across
-# two consecutive installs and left the stale v0.1.0 text in place with no
-# error anywhere.
+#   shipped as an ordinary file -> every `dpkg -i` overwrites the working
+#     copy. Source tree == install target, so this destroys local edits.
+#   omitted from the payload     -> dpkg DELETES the file on upgrade.
+#     Verified: the next `dpkg -i` removed the README outright.
+#   declared a conffile          -> PROMPTS, and the prompt blocks
+#     `--configure`, so the postinst never runs and the resolver never
+#     comes back. Verified: the package was left `iU` with every unit
+#     inactive. DEBIAN_FRONTEND=noninteractive does NOT suppress it.
 #
-# Documentation belongs in the repository and on the package's own docs
-# page, not in a payload that clobbers the user's tree. dh_installdocs
-# already handles the /usr/share/doc copy via debian/copyright.
-for f in VERSION souran-toggle toggles.conf \
+# Shipping them as plain files is the least harmful of the three: they
+# are replaced wholesale on upgrade, which is acceptable for generated
+# docs, and the authoritative copies live in git.
+#
+# Conffiles are reserved for the two unbound YAML configs and
+# toggles.conf, which genuinely ARE operator-edited.
+for f in VERSION CHANGELOG.md README.md souran-toggle toggles.conf \
          install-souran.sh souran-enable-all \
          souran_auth.py souran_features.py souran_portmap.py \
          souran_technitium.py souran_dashboard.py souran_client.py \
