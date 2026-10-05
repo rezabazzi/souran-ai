@@ -18,6 +18,21 @@ than by reading the code.
 
 ### Security
 
+- **unbound 1.24.2 -> 1.26.2, patching CVE-2026-85501.** The resolver
+  was running a build with a known, published, unpatched
+  algorithmic-complexity DoS ("ReTrap", NLnet Labs, CWE-770, published
+  2026-09-16): "Unbound up to and including 1.26.0 is vulnerable." One
+  malicious zone can drive the resolver into unbounded work via TagTrap,
+  DelegationTrap, NsecTrap or AdditionalTrap -- a directly triggerable
+  availability attack against a resolver whose entire purpose is
+  availability on a hostile network. The **vendored source was replaced
+  too**, since the .deb compiles from engine/unbound-src and a rebuild
+  would otherwise have shipped the vulnerable version again while looking
+  successful. build-deb-payload.sh now refuses to package any resolver
+  binary that is not 1.26.2, and the advisory's limits are set explicitly
+  (val-hash-attempts: 32, val-validation-attempts: 32,
+  val-clean-additional: no) so an explicit value survives a downgrade.
+
 - **Plaintext sudo password purged.** A hardcoded credential was embedded
   in six source files and had already reached git history. Every call site
   now uses `sudo -n`.

@@ -1,27 +1,22 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-10-05T00:27:38.687484+00:00",
+  "updated_at": "2026-10-05T00:30:42.331788+00:00",
   "uptime_seconds": 0,
-  "cycles": 1847,
+  "cycles": 1852,
   "resolution": {
-    "total_queries": 1847,
-    "tier1_hits": 23,
-    "tier2_hits": 27,
-    "poison_blocked": 10,
-    "failures": 3,
+    "total_queries": 1852,
+    "tier1_hits": 12,
+    "tier2_hits": 10,
+    "poison_blocked": 4,
+    "failures": 4,
     "latencies_ms": [],
     "top_domains": {}
   },
   "doh_endpoints": {
     "https://cloudflare-dns.com/dns-query": {
-      "success": 1674,
+      "success": 1679,
       "fail": 219,
       "latency_ms": [
-        1017.9,
-        1658.5,
-        1299.6,
-        1465.4,
-        1006.0,
         2153.7,
         12172.0,
         1814.9,
@@ -216,18 +211,18 @@
         2237.2,
         4224.9,
         1633.6,
-        1558.1
+        1558.1,
+        7307.5,
+        6978.9,
+        1261.9,
+        1175.0,
+        1191.0
       ]
     },
     "https://dns.google/resolve": {
-      "success": 1751,
+      "success": 1756,
       "fail": 142,
       "latency_ms": [
-        1422.4,
-        1699.8,
-        3536.9,
-        3318.6,
-        1464.3,
         1976.5,
         3813.2,
         1391.2,
@@ -422,27 +417,27 @@
         2150.4,
         1174.5,
         1630.8,
-        1901.0
+        1901.0,
+        2217.5,
+        1147.1,
+        9157.7,
+        1182.5,
+        1228.9
       ]
     }
   },
   "doh_best_endpoint": "https://dns.google/resolve",
   "censorship": {
-    "poisoned_answers": 10,
+    "poisoned_answers": 4,
     "censored_names_blocked": [],
     "first_seen": {},
     "blocked_by_tier": {
       "tier1": 0,
-      "tier2": 1158
+      "tier2": 1161
     }
   },
   "cache": {
     "hit_rate_history": [
-      0,
-      0,
-      0,
-      0,
-      0,
       0,
       0,
       0,
@@ -537,7 +532,12 @@
       0,
       0,
       0.0,
-      0.091
+      0.091,
+      0.067,
+      0.062,
+      0.0,
+      0.0,
+      0.5
     ],
     "recommended_ttl": 600,
     "prefetch_candidates": []
