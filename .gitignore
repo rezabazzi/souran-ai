@@ -63,3 +63,6 @@ data/learning-engine.json
 # .deb with something reproducible.
 config/blocklists/blocklist.conf
 config/blocklists/compiled.json
+config/blocklists/blocklist.zone
+config/blocklists/lan.conf
+config/blocklists/*.tmp
