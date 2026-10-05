@@ -46,3 +46,14 @@ target/
 engine/unbound/sbin/
 engine/unbound/lib/
 engine/unbound/include/
+
+# Rollback archive of the OLD resolver build. 11 MB of stale build
+# output that `git add -A` picked up; shipping it would put a
+# CVE-2026-85501-vulnerable binary in the public repository.
+engine-unbound-*.tar.gz
+
+# Runtime state, rewritten on every run. engine/unbound-root.key is the
+# DNSSEC trust anchor and MUST ship -- it is public data -- so it is
+# force-added by build-deb-payload.sh rather than ignored here.
+config/souran-ca.srl
+data/learning-engine.json
