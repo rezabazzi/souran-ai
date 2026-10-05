@@ -253,4 +253,37 @@ esac
 
 #DEBHELPER#
 
+# ---- ad/tracker blocklists -----------------------------------------
+# The compiler ships, but the generated ruleset does not: it is 37 MB of
+# derived data that rebuilds in seconds from the cached lists. Without
+# this, a fresh install would have a blocklist feature that silently does
+# nothing and probes OFF.
+if [ -x /opt/souran-ai/souran_blocklists.py ]; then
+    if [ -d /var/lib/technitium/blocklists ] && [ -n "$(ls -A /var/lib/technitium/blocklists 2>/dev/null)" ]; then
+        COMPILE_OUT=$(/opt/souran-ai/souran_blocklists.py compile --install 2>&1)
+        if [ $? -eq 0 ]; then
+            echo "$COMPILE_OUT" | sed "s/^/souran: /"
+            echo "souran: blocklists compiled ($(grep -c "^local-data:" /opt/souran-ai/config/blocklists/blocklist.conf 2>/dev/null || echo 0) rules)"
+            # Only reload if the config actually validates. A ruleset that
+            # would not parse must never be able to stop the resolver.
+            # Capture the output, then test the REAL exit status --
+            # never pipe a validity check into sed/tee, because the
+            # pipeline's status is the last command's, not the check's.
+            CHECK_OUT=$(/opt/souran-ai/engine/unbound/sbin/unbound-checkconf \
+                        /opt/souran-ai/config/souran-unbound.conf.yaml 2>&1)
+            if [ $? -eq 0 ]; then
+                systemctl reload souran-dns >/dev/null 2>&1 || true
+            else
+                echo "souran: WARNING - blocklist config invalid; NOT reloaded, resolver left as-is"
+                echo "$CHECK_OUT" | sed "s/^/souran:   /"
+            fi
+        else
+            echo "souran: WARNING - blocklist compile failed; blocking left disabled"
+            echo "$COMPILE_OUT" | sed "s/^/souran:   /"
+        fi
+    else
+        echo "souran: no cached blocklists; run souran_blocklists.py fetch to enable blocking"
+    fi
+fi
+
 exit 0
