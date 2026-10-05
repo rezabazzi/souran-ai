@@ -66,6 +66,23 @@ for f in souran-firewall.sh souran-feature-apply.sh souran-feature-executor.sh \
     [ -f "$f" ] && cp -a "$f" "$DEST/" || true
 done
 
+# --- unbound version gate ---------------------------------------------
+# The resolver binary and the vendored source MUST agree. A payload that
+# ships a 1.24.2 binary while claiming to build from source would be
+# both misleading and, since 1.24.2 is affected by CVE-2026-85501
+# (ReTrap DNSSEC algorithmic-complexity DoS), vulnerable.
+UNBOUND_EXPECTED="1.26.2"
+if [ -x "$DEST/engine/unbound/sbin/unbound" ]; then
+    got="$("$DEST/engine/unbound/sbin/unbound" -V 2>/dev/null | head -1 \
+          | awk '{print $2}')"
+    if [ "$got" != "$UNBOUND_EXPECTED" ]; then
+        echo "souran-deb: REFUSING — expected unbound $UNBOUND_EXPECTED," >&2
+        echo "             payload contains ${got:-unknown}" >&2
+        exit 1
+    fi
+    echo "souran-deb: unbound $got (CVE-2026-85501 patched)"
+fi
+
 # --- censorship config, dns config --------------------------------------
 if [ -d censorship/config ]; then
     mkdir -p "$DEST/censorship"

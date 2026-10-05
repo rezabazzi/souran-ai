@@ -54,6 +54,24 @@ server:
     # never arms. cache-min-ttl gives short-TTL CDN records a floor so a
     # query can refresh them proactively.
     #
+    # ---- CVE-2026-85501 (ReTrap) mitigations -------------------------
+    # NLnet Labs' advisory on algorithmic-complexity DoS against DNSSEC
+    # validation. A single malicious zone can drive the resolver into
+    # unbounded work: TagTrap (many mismatched DNSKEY/RRSIG/DS),
+    # DelegationTrap (iterative validation down a deep chain), NsecTrap
+    # (many invalid NSEC records) and AdditionalTrap (validating the
+    # ADDITIONAL section, which is attacker-influenced and useless to us
+    # since we ignore it).
+    #
+    # These became the DEFAULT in 1.26.1. They are set explicitly anyway:
+    # an explicit value survives a downgrade, and a reader can see that
+    # the limits are deliberate rather than inherited.
+    # Set OFF: unbound would otherwise DNSSEC-validate the ADDITIONAL section,
+    # which is attacker-influenced and which this resolver ignores.
+    val-clean-additional: no
+    val-hash-attempts: 32
+    val-validation-attempts: 32
+
     # Technitium-equivalent smart cache
     msg-cache-size: 128m
     rrset-cache-size: 256m
@@ -111,7 +129,6 @@ server:
     # when signatures are present; we just do not fail the query when the
     # chain cannot be completed in transit.
     val-permissive-mode: yes
-    val-clean-additional: yes
     val-log-level: 2
     val-max-restart: 5
     module-config: "validator iterator"
